@@ -18,7 +18,7 @@ export class QuestionParser {
     if (!text || !text.trim()) return '';
     
     // Normalize newlines
-    let normalized = text.replace(/\r\n/g, '\n');
+    let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     let lines = normalized.split('\n');
     
     // 1. Scan for Answer Key at the bottom
@@ -50,6 +50,7 @@ export class QuestionParser {
 
     const questionStartRegex = /^(\d+)\.\s*(.*)$/;
     const choiceRegex = /^([a-zA-Z])[\s).:-]+\s*(.*)$/;
+    const sectionHeaderRegex = /^(section|part|chapter|unit)\s+\w+[\s-:]*/i;
 
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i];
@@ -63,6 +64,73 @@ export class QuestionParser {
       if (trimmed === '') {
         output.push('');
         continue;
+      }
+
+      // Heuristic: ignore section headers and prevent them from appending to previous questions
+      if (trimmed.match(sectionHeaderRegex)) {
+        output.push('');
+        output.push('% ' + trimmed);
+        output.push('');
+        currentQuestionNum = null;
+        currentCorrectLetter = null;
+        continue;
+      }
+
+      // Heuristic: Table question detection (number on a line by itself, followed by text, followed by choices)
+      if (/^\d+$/.test(trimmed)) {
+        const qNum = trimmed;
+        let qTextLineIdx = -1;
+        
+        // Find the next non-empty line as question text
+        for (let k = i + 1; k < Math.min(lines.length, i + 5); k++) {
+          if (lines[k].trim() !== '') {
+            qTextLineIdx = k;
+            break;
+          }
+        }
+
+        if (qTextLineIdx !== -1) {
+          const qText = lines[qTextLineIdx].trim();
+          
+          // Peek ahead for choices
+          const choices = [];
+          let j = qTextLineIdx + 1;
+          let lastChoiceIdx = j;
+
+          for (; j < lines.length; j++) {
+            const choiceTrimmed = lines[j].trim();
+            if (choiceTrimmed === '') continue;
+
+            // If we hit a number or section header, stop peeking
+            if (/^\d+$/.test(choiceTrimmed) || /^\d+\./.test(choiceTrimmed) || choiceTrimmed.match(sectionHeaderRegex)) {
+              break;
+            }
+
+            choices.push(choiceTrimmed);
+            lastChoiceIdx = j;
+            if (choices.length >= 6) break;
+          }
+
+          if (choices.length >= 2) {
+            output.push(`${qNum}. ${qText}`);
+            choices.forEach((choice, idx) => {
+              let isCorrect = false;
+              let choiceText = choice;
+              if (choiceText.startsWith('*')) {
+                isCorrect = true;
+                choiceText = choiceText.substring(1).trim();
+              }
+              const letter = String.fromCharCode(97 + idx); // a, b, c, d
+              const prefix = isCorrect ? '*' : '';
+              output.push(`${prefix}${letter}) ${choiceText}`);
+            });
+
+            i = lastChoiceIdx;
+            currentQuestionNum = qNum;
+            currentCorrectLetter = null;
+            continue;
+          }
+        }
       }
 
       let qMatch = trimmed.match(questionStartRegex);
@@ -423,6 +491,9 @@ export class QuestionParser {
     let nextTitle = null;
     let nextPoints = null;
     
+    // Track whether we can append multi-line content to the last choice
+    let canAppendToLastChoice = true;
+
     // Track global settings
     const settings = {
       shuffle_answers: 'false',
@@ -437,6 +508,7 @@ export class QuestionParser {
     const questionRegex = /^\d+\.\s*(.*)$/;
     const titleRegex = /^[Tt]itle:\s*(.*)$/;
     const pointsRegex = /^[Pp]oints:\s*(.*)$/;
+    const sectionHeaderRegex = /^(section|part|chapter|unit)\s+\w+[\s-:]*/i;
     
     // Choice Regexes
     const mctfCorrectRegex = /^\*([a-zA-Z])\)\s*(.*)$/;
@@ -460,8 +532,14 @@ export class QuestionParser {
       const line = lines[i].trim();
       const lineNum = i + 1;
 
-      // Skip empty lines or comments
-      if (!line || line.startsWith('%') || line.startsWith('//')) {
+      // An empty line signals the end of choice-appending context
+      if (lines[i].trim() === '') {
+        canAppendToLastChoice = false;
+        continue;
+      }
+
+      // Skip comments
+      if (line.startsWith('%') || line.startsWith('//')) {
         continue;
       }
 
@@ -489,6 +567,16 @@ export class QuestionParser {
       }
       if (match = line.match(cantGoBackRegex)) {
         settings.cant_go_back = this.cleanBoolString(match[1]);
+        continue;
+      }
+
+      // Check section headers (resets context and finishes current question)
+      if (match = line.match(sectionHeaderRegex)) {
+        if (currentQuestion) {
+          this.finalizeQuestion(currentQuestion, lineNum - 1);
+          questions.push(currentQuestion);
+          currentQuestion = null;
+        }
         continue;
       }
 
@@ -526,6 +614,7 @@ export class QuestionParser {
         // Reset metadata
         nextTitle = null;
         nextPoints = null;
+        canAppendToLastChoice = false; // Reset on new question
         continue;
       }
 
@@ -563,6 +652,7 @@ export class QuestionParser {
           correct: true,
           feedback: null
         });
+        canAppendToLastChoice = true;
         continue;
       }
 
@@ -575,6 +665,7 @@ export class QuestionParser {
           correct: false,
           feedback: null
         });
+        canAppendToLastChoice = true;
         continue;
       }
 
@@ -587,6 +678,7 @@ export class QuestionParser {
           correct: true,
           feedback: null
         });
+        canAppendToLastChoice = true;
         continue;
       }
 
@@ -599,6 +691,7 @@ export class QuestionParser {
           correct: false,
           feedback: null
         });
+        canAppendToLastChoice = true;
         continue;
       }
 
@@ -611,6 +704,7 @@ export class QuestionParser {
           correct: true,
           feedback: null
         });
+        canAppendToLastChoice = true;
         continue;
       }
 
@@ -641,13 +735,16 @@ export class QuestionParser {
 
       // If we reach here, append the text to the current question text or choice text
       // Multi-line support
-      if (currentQuestion.choices.length > 0) {
+      if (canAppendToLastChoice && currentQuestion.choices.length > 0) {
         // Append to the last choice text
         const lastChoice = currentQuestion.choices[currentQuestion.choices.length - 1];
         lastChoice.text += '\n' + line;
-      } else {
+      } else if (currentQuestion.choices.length === 0) {
         // Append to the question prompt text
         currentQuestion.text += '\n' + line;
+      } else {
+        // Ignore dangling text separated by empty lines and log a warning
+        this.warnings.push({ line: lineNum, message: `Ignored dangling line in question block: "${line.substring(0, 30)}..."` });
       }
     }
 

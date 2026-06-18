@@ -111,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const uploadFileInfo = document.getElementById('upload-file-info');
   const uploadFileName = document.getElementById('upload-file-name');
   const btnRemoveFile = document.getElementById('btn-remove-file');
+  const charCountSpan = document.getElementById('editor-char-count');
 
   // Set initial input states
   quizTitleInput.value = state.quizOptions.title;
@@ -119,6 +120,13 @@ document.addEventListener('DOMContentLoaded', () => {
   showAnswersSwitch.checked = state.quizOptions.showCorrectAnswers;
   oneQuestionSwitch.checked = state.quizOptions.oneQuestionAtATime;
   cantGoBackSwitch.checked = state.quizOptions.cantGoBack;
+
+  // Helper to update character count
+  function updateCharCount() {
+    if (charCountSpan && textEditor) {
+      charCountSpan.innerText = `${textEditor.value.length} character${textEditor.value.length !== 1 ? 's' : ''}`;
+    }
+  }
 
   // Initialize spreadsheet grid rows (start with 5 empty rows)
   initializeGrid(5);
@@ -160,6 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Clear editors
     textEditor.value = '';
+    updateCharCount();
     initializeGrid(5);
     triggerParse();
     showToast("Uploaded file removed.", "info");
@@ -210,6 +219,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const cleaned = QuestionParser.cleanText(currentText);
     textEditor.value = cleaned;
+    updateCharCount();
     triggerParse();
     showToast("Text cleaned and standardized successfully!", "success");
   });
@@ -237,6 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Parser Debouncer
   let parseTimeout = null;
   textEditor.addEventListener('input', () => {
+    updateCharCount();
     clearTimeout(parseTimeout);
     parseTimeout = setTimeout(triggerParse, 400);
   });
@@ -245,6 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
   btnDemo.addEventListener('click', () => {
     if (contentMarkdown.classList.contains('active')) {
       textEditor.value = demoMarkdown;
+      updateCharCount();
       triggerParse();
       showToast("Demo markdown loaded successfully!", "success");
     } else {
@@ -736,6 +748,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           switchToMarkdownTab();
           textEditor.value = text;
+          updateCharCount();
           triggerParse();
         }
       };
@@ -752,6 +765,7 @@ document.addEventListener('DOMContentLoaded', () => {
           .then((result) => {
             switchToMarkdownTab();
             textEditor.value = result.value;
+            updateCharCount();
             triggerParse();
             showToast("Word document text loaded successfully!", "success");
           })
@@ -793,6 +807,7 @@ document.addEventListener('DOMContentLoaded', () => {
           
           switchToMarkdownTab();
           textEditor.value = fullText.trim();
+          updateCharCount();
           triggerParse();
           showToast("PDF text extracted successfully!", "success");
         } catch (err) {
