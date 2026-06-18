@@ -573,7 +573,7 @@ export class QuestionParser {
       // Check section headers (resets context and finishes current question)
       if (match = line.match(sectionHeaderRegex)) {
         if (currentQuestion) {
-          this.finalizeQuestion(currentQuestion, lineNum - 1);
+          this.finalizeQuestion(currentQuestion, currentQuestion.startLine);
           questions.push(currentQuestion);
           currentQuestion = null;
         }
@@ -595,7 +595,7 @@ export class QuestionParser {
       if (match = line.match(questionRegex)) {
         // Finalize previous question if any
         if (currentQuestion) {
-          this.finalizeQuestion(currentQuestion, lineNum - 1);
+          this.finalizeQuestion(currentQuestion, currentQuestion.startLine);
           questions.push(currentQuestion);
         }
 
@@ -608,7 +608,8 @@ export class QuestionParser {
           choices: [],
           feedback: null,
           correctFeedback: null,
-          incorrectFeedback: null
+          incorrectFeedback: null,
+          startLine: lineNum
         };
 
         // Reset metadata
@@ -750,7 +751,7 @@ export class QuestionParser {
 
     // Finalize the last question
     if (currentQuestion) {
-      this.finalizeQuestion(currentQuestion, lines.length);
+      this.finalizeQuestion(currentQuestion, currentQuestion.startLine);
       questions.push(currentQuestion);
     }
 
