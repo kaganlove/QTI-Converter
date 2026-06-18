@@ -708,7 +708,8 @@ export class QuestionParser {
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
           text: match[2].trim(),
           correct: true,
-          feedback: null
+          feedback: null,
+          syntax: 'mc'
         });
         canAppendToLastChoice = true;
         continue;
@@ -721,7 +722,8 @@ export class QuestionParser {
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
           text: match[2].trim(),
           correct: false,
-          feedback: null
+          feedback: null,
+          syntax: 'mc'
         });
         canAppendToLastChoice = true;
         continue;
@@ -734,7 +736,8 @@ export class QuestionParser {
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
           text: match[1].trim(),
           correct: true,
-          feedback: null
+          feedback: null,
+          syntax: 'ma'
         });
         canAppendToLastChoice = true;
         continue;
@@ -747,7 +750,8 @@ export class QuestionParser {
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
           text: match[1].trim(),
           correct: false,
-          feedback: null
+          feedback: null,
+          syntax: 'ma'
         });
         canAppendToLastChoice = true;
         continue;
@@ -760,7 +764,8 @@ export class QuestionParser {
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
           text: match[1].trim(),
           correct: true,
-          feedback: null
+          feedback: null,
+          syntax: 'sa'
         });
         canAppendToLastChoice = true;
         continue;
@@ -939,6 +944,14 @@ export class QuestionParser {
         this.errors.push({
           line: lineNum,
           message: `Multiple Answer question "${q.text.substring(0, 30)}..." has no correct answers marked ([*]).`
+        });
+      }
+      
+      const hasMcChoice = q.choices.some(c => c.syntax === 'mc');
+      if (hasMcChoice) {
+        this.errors.push({
+          line: lineNum,
+          message: `Multiple Answer question "${q.text.substring(0, 30)}..." mixes checkbox syntax ([ ] or [*]) with multiple choice syntax (*a) or a)). Please use only checkbox syntax for all choices.`
         });
       }
     }
