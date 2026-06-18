@@ -663,9 +663,48 @@ document.addEventListener('DOMContentLoaded', () => {
     const lineLength = lines[lineNum - 1].length;
     textEditor.setSelectionRange(offset, offset + lineLength);
     
-    const lineHeight = parseFloat(window.getComputedStyle(textEditor).lineHeight) || 20;
-    const topPos = (lineNum - 1) * lineHeight;
-    textEditor.scrollTop = topPos - (textEditor.clientHeight / 2);
+    try {
+      const style = window.getComputedStyle(textEditor);
+      const div = document.createElement('div');
+      
+      const properties = [
+        'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'fontVariant',
+        'wordSpacing', 'letterSpacing', 'textIndent', 'textTransform',
+        'lineHeight', 'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight',
+        'borderTopWidth', 'borderBottomWidth', 'borderLeftWidth', 'borderRightWidth',
+        'boxSizing'
+      ];
+      
+      properties.forEach(prop => {
+        div.style[prop] = style[prop];
+      });
+      
+      div.style.position = 'absolute';
+      div.style.visibility = 'hidden';
+      div.style.whiteSpace = 'pre-wrap';
+      div.style.wordBreak = 'break-word';
+      div.style.overflow = 'hidden';
+      div.style.width = textEditor.clientWidth + 'px';
+      
+      document.body.appendChild(div);
+      
+      div.textContent = text.substring(0, offset);
+      
+      const span = document.createElement('span');
+      span.textContent = text.substring(offset, offset + (lineLength || 1)) || '.';
+      div.appendChild(span);
+      
+      const topPos = span.offsetTop;
+      document.body.removeChild(div);
+      
+      // Center the highlighted line inside the textEditor viewport
+      textEditor.scrollTop = topPos - (textEditor.clientHeight / 2);
+    } catch (e) {
+      console.error("Failed to compute precise caret position, falling back:", e);
+      const lineHeight = parseFloat(window.getComputedStyle(textEditor).lineHeight) || 22.8;
+      const topPos = (lineNum - 1) * lineHeight;
+      textEditor.scrollTop = topPos - (textEditor.clientHeight / 2);
+    }
   }
 
   // Render compilation validator diagnostics logs
