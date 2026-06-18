@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas QTI Converter | TSTC Instructional Design Toolkit</title>
+  <!-- Google Fonts -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- JSZip CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <!-- Ambient background glow elements -->
+  <div class="bg-glow-1"></div>
+  <div class="bg-glow-2"></div>
+
+  <!-- Header Section -->
+  <header>
+    <div class="brand">
+      <div class="brand-logo">Q</div>
+      <div class="brand-title">
+        <h1>QTI Converter</h1>
+        <p>TSTC Instructional Design Toolkit</p>
+      </div>
+    </div>
+    <div class="actions" style="display: flex; gap: 0.75rem;">
+      <button class="btn btn-secondary" id="btn-load-demo">
+        <i class="fas fa-magic"></i> Load Demo
+      </button>
+      <button class="btn btn-secondary" id="btn-show-help">
+        <i class="fas fa-question-circle"></i> Formatting Help
+      </button>
+    </div>
+  </header>
+
+  <!-- Dashboard Grid -->
+  <main>
+    <!-- Left Column: Source Importer Panels -->
+    <section class="panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <i class="fas fa-edit"></i> Source Importer
+        </div>
+        <div class="tabs">
+          <button class="tab-btn active" id="tab-markdown">
+            <i class="fas fa-file-alt"></i> Text Editor
+          </button>
+          <button class="tab-btn" id="tab-spreadsheet">
+            <i class="fas fa-table"></i> Spreadsheet Grid
+          </button>
+        </div>
+      </div>
+      
+      <div class="panel-body">
+        <!-- Text Editor Tab Content -->
+        <div class="tab-content active" id="content-markdown">
+          <div class="editor-container">
+            <textarea class="editor" id="text-editor" placeholder="Write or paste your test bank questions here...
+Examples:
+
+1. What is the primary branding color of TSTC?
+*a) Royal Blue
+b) Red
+c) Green
+d) Maroon
+
+2. QTI files are XML packages.
+*a) True
+b) False"></textarea>
+          </div>
+          <div class="editor-footer">
+            <span>Supports Aiken format and text2qti Markdown</span>
+            <span id="editor-char-count">0 characters</span>
+          </div>
+        </div>
+
+        <!-- Spreadsheet Grid Tab Content -->
+        <div class="tab-content" id="content-spreadsheet">
+          <div class="spreadsheet-container">
+            <div class="spreadsheet-toolbar">
+              <button class="btn btn-secondary btn-sm" id="btn-add-row">
+                <i class="fas fa-plus"></i> Add Row
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btn-clear-grid" style="color: var(--danger)">
+                <i class="fas fa-trash-alt"></i> Clear Table
+              </button>
+            </div>
+            <div class="grid-wrapper">
+              <table class="grid-table">
+                <thead>
+                  <tr>
+                    <th>Question Text</th>
+                    <th>Type</th>
+                    <th>Pts</th>
+                    <th>Correct Answer(s)</th>
+                    <th>Choice A</th>
+                    <th>Choice B</th>
+                    <th>Choice C</th>
+                    <th>Choice D</th>
+                    <th>Explanation Feedback</th>
+                  </tr>
+                </thead>
+                <tbody id="grid-table-body">
+                  <!-- Generated rows will insert here -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="editor-footer">
+            <span>Copy-paste table directly from Excel/Google Sheets</span>
+            <span>FITB supports comma-separated blanks.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: Settings & Live Preview -->
+    <section class="panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <i class="fas fa-cogs"></i> Settings &amp; Live Preview
+        </div>
+      </div>
+      
+      <div class="panel-body" style="padding-bottom: 0.5rem;">
+        <!-- Settings Panel -->
+        <div class="settings-card" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem;">
+          <div class="form-group">
+            <label for="quiz-title">Question Bank Name (Title)</label>
+            <input type="text" class="form-control" id="quiz-title" placeholder="Enter Quiz Bank Title">
+          </div>
+          
+          <div class="form-group" style="margin-bottom: 0.5rem;">
+            <label for="quiz-description">Description / Instructions</label>
+            <input type="text" class="form-control" id="quiz-description" placeholder="Description of the question bank">
+          </div>
+
+          <div class="options-grid">
+            <label class="switch-label">
+              <input type="checkbox" id="opt-shuffle" checked>
+              <span>Shuffle Answers</span>
+            </label>
+            <label class="switch-label">
+              <input type="checkbox" id="opt-show-answers" checked>
+              <span>Show Correct Answers</span>
+            </label>
+            <label class="switch-label">
+              <input type="checkbox" id="opt-one-question">
+              <span>One Question at a Time</span>
+            </label>
+            <label class="switch-label">
+              <input type="checkbox" id="opt-cant-back">
+              <span>Lock (Can't Go Back)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Live Validation Alert Box -->
+        <div id="alert-container" class="validation-alerts">
+          <!-- Warnings and errors listed dynamically -->
+        </div>
+
+        <!-- Live Preview Sub-Panel -->
+        <div class="panel-title" style="margin-top: 0.5rem; justify-content: space-between;">
+          <span style="font-size: 0.95rem; font-weight: 500; color: var(--text-muted)">Live Preview</span>
+          <div class="preview-stats">
+            <span>Questions: <strong id="stat-q-count">0</strong></span>
+            <span>Total Points: <strong id="stat-points">0</strong></span>
+          </div>
+        </div>
+
+        <div class="preview-body-wrapper" style="flex: 1; overflow-y: auto; margin-top: 0.25rem; padding-right: 0.25rem;">
+          <div class="preview-container" id="preview-body">
+            <!-- Questions rendered here -->
+            <div class="empty-state">
+              <i class="fas fa-file-import"></i>
+              <h3>No Questions Parsed</h3>
+              <p>Paste text, upload a file, or enter questions to see a real-time visual preview of your Canvas question bank.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Exporter Bar -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 1rem; margin-top: auto; display: flex; justify-content: flex-end;">
+          <button class="btn btn-primary" id="btn-download" style="width: 100%; justify-content: center; padding: 0.8rem;">
+            <i class="fas fa-download"></i> Download QTI Zip
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <p>&copy; 2026 Texas State Technical College. Developed for Instructional Designers.</p>
+  </footer>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Help / Formatting Modal -->
+  <div class="modal-overlay" id="modal-help">
+    <div class="modal">
+      <div class="modal-header">
+        <h3><i class="fas fa-question-circle"></i> Question Formatting Guide</h3>
+        <button id="modal-close" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:1.25rem;">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <h4>1. Aiken Format (Multiple Choice Only)</h4>
+        <p>Paste questions directly from Google Docs or PDFs. Each choice must start with a letter and parenthesis/period, followed by the answer statement.</p>
+        <pre>What is the capital of Texas?
+A) Austin
+B) Houston
+C) Dallas
+ANSWER: A</pre>
+
+        <h4>2. text2qti Markdown Format (All Types)</h4>
+        <p>Use simple markdown keywords to define titles, points, and varied question types.</p>
+        
+        <p><strong>Multiple Choice &amp; True/False:</strong> Mark the correct answer with an asterisk (`*`):</p>
+        <pre>Title: MC Example
+Points: 1
+1. Choose the primary cloud provider.
+a) AWS
+b) Azure
+*c) Google Cloud
+... Feedback for choice c</pre>
+
+        <p><strong>Multiple Answers (Checkboxes):</strong> Use `[*]` for correct and `[ ]` for incorrect choices:</p>
+        <pre>Points: 2
+2. Select all cloud databases.
+[*] DynamoDB
+[ ] EC2
+[*] Cloud Spanner</pre>
+
+        <p><strong>Fill in the Blank:</strong> Use asterisk `*` lists to specify all acceptable answers:</p>
+        <pre>3. What is the abbreviation for Texas State Technical College?
+* TSTC
+* T.S.T.C.</pre>
+
+        <p><strong>Essay Question:</strong> Add three underscores `___` on a new line below the prompt:</p>
+        <pre>4. Explain the benefits of continuous integration in software delivery.
+___</pre>
+
+        <p><strong>Numerical Range:</strong> Specify exact values and margins (`+-`), or range brackets `[min, max]`:</p>
+        <pre>5. Solve for x: 5 * 5.
+= 25 +- 0.1</pre>
+
+        <h4>3. Spreadsheet Grid Importer</h4>
+        <p>Copy-paste headers and cells directly from Excel or Google Sheets. The grid maps headers automatically. Multiple Answer correct options can be comma-separated list like `A, C`.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('modal-help').style.display='none'">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript Entry Module -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
