@@ -96,6 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnDownload = document.getElementById('btn-download');
   const btnDemo = document.getElementById('btn-load-demo');
   const btnHelp = document.getElementById('btn-show-help');
+  const btnAutoClean = document.getElementById('btn-auto-clean');
   const modalHelp = document.getElementById('modal-help');
   const modalClose = document.getElementById('modal-close');
   
@@ -194,6 +195,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target === modalHelp) {
       modalHelp.style.display = 'none';
     }
+  });
+
+  // Auto-Clean Text Button Listener
+  btnAutoClean.addEventListener('click', () => {
+    if (!contentMarkdown.classList.contains('active')) {
+      showToast("Auto-Clean is only supported for text in the Text Editor tab.", "info");
+      return;
+    }
+    const currentText = textEditor.value;
+    if (!currentText.trim()) {
+      showToast("Please enter some text in the Text Editor to clean up first.", "info");
+      return;
+    }
+    const cleaned = QuestionParser.cleanText(currentText);
+    textEditor.value = cleaned;
+    triggerParse();
+    showToast("Text cleaned and standardized successfully!", "success");
   });
 
   // Settings change listeners

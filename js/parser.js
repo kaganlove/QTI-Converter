@@ -10,6 +10,201 @@ export class QuestionParser {
   }
 
   /**
+   * Smart clean-up for messy, non-standard quiz formats.
+   * Standardizes inline correct answers, true/false choices, checkbox formats,
+   * answer keys, and numeric answers.
+   */
+  static cleanText(text) {
+    if (!text || !text.trim()) return '';
+    
+    // Normalize newlines
+    let normalized = text.replace(/\r\n/g, '\n');
+    let lines = normalized.split('\n');
+    
+    // 1. Scan for Answer Key at the bottom
+    const answerKeyMap = {};
+    const answerKeyRegex = /(answer\s*key|answers):\s*(.*)$/i;
+    let answerKeyLineIdx = -1;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const match = line.match(answerKeyRegex);
+      if (match) {
+        answerKeyLineIdx = i;
+        const keyContent = match[2];
+        const pairs = keyContent.match(/(\d+)[\s.:-]*([a-zA-Z])/g);
+        if (pairs) {
+          pairs.forEach(pair => {
+            const m = pair.match(/(\d+)[\s.:-]*([a-zA-Z])/);
+            if (m) {
+              answerKeyMap[m[1]] = m[2].toUpperCase();
+            }
+          });
+        }
+      }
+    }
+
+    let output = [];
+    let currentQuestionNum = null;
+    let currentCorrectLetter = null;
+
+    const questionStartRegex = /^(\d+)\.\s*(.*)$/;
+    const choiceRegex = /^([a-zA-Z])[\s).:-]+\s*(.*)$/;
+
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i];
+      let trimmed = line.trim();
+
+      if (i === answerKeyLineIdx) {
+        output.push('% ' + line);
+        continue;
+      }
+
+      if (trimmed === '') {
+        output.push('');
+        continue;
+      }
+
+      let qMatch = trimmed.match(questionStartRegex);
+      if (qMatch) {
+        currentQuestionNum = qMatch[1];
+        let qText = qMatch[2];
+        currentCorrectLetter = null;
+
+        let inlineCorrectMatch = qText.match(/(.*?)\s*\[(correct|answer):\s*([a-zA-Z])\]\s*$/i);
+        if (inlineCorrectMatch) {
+          qText = inlineCorrectMatch[1].trim();
+          currentCorrectLetter = inlineCorrectMatch[3].toUpperCase();
+        }
+
+        if (answerKeyMap[currentQuestionNum]) {
+          currentCorrectLetter = answerKeyMap[currentQuestionNum];
+        }
+
+        let inlineTfMatch = qText.match(/(.*?)\s*Answer:\s*(true|false)\s*$/i);
+        if (inlineTfMatch) {
+          qText = inlineTfMatch[1].trim();
+          const tfAnswer = inlineTfMatch[2].toLowerCase();
+          
+          output.push(`${currentQuestionNum}. ${qText}`);
+          if (tfAnswer === 'true') {
+            output.push('*a) True');
+            output.push('b) False');
+          } else {
+            output.push('a) True');
+            output.push('*b) False');
+          }
+          continue;
+        }
+
+        output.push(`${currentQuestionNum}. ${qText}`);
+        continue;
+      }
+
+      let cMatch = trimmed.match(choiceRegex);
+      if (cMatch && !/^\d+/.test(trimmed)) {
+        let letter = cMatch[1].toUpperCase();
+        let choiceText = cMatch[2].trim();
+        
+        let isCorrect = false;
+
+        if (currentCorrectLetter && letter === currentCorrectLetter) {
+          isCorrect = true;
+        }
+
+        let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
+        if (suffixCorrectMatch) {
+          choiceText = suffixCorrectMatch[1].trim();
+          isCorrect = true;
+        }
+
+        if (trimmed.startsWith('*')) {
+          isCorrect = true;
+        }
+
+        const prefix = isCorrect ? '*' : '';
+        output.push(`${prefix}${letter.toLowerCase()}) ${choiceText}`);
+        continue;
+      }
+
+      if (trimmed.toLowerCase().startsWith('[x]')) {
+        output.push('[*] ' + trimmed.substring(3).trim());
+        continue;
+      }
+      if (trimmed.startsWith('[ ]') || trimmed.startsWith('[]')) {
+        output.push('[ ] ' + trimmed.replace(/^\[\s*\]/, '').trim());
+        continue;
+      }
+
+      if (trimmed === '*True' || trimmed === '*true') {
+        output.push('*a) True');
+        continue;
+      }
+      if (trimmed === 'True' || trimmed === 'true') {
+        output.push('a) True');
+        continue;
+      }
+      if (trimmed === '*False' || trimmed === '*false') {
+        output.push('*b) False');
+        continue;
+      }
+      if (trimmed === 'False' || trimmed === 'false') {
+        output.push('b) False');
+        continue;
+      }
+
+      let answerMatch = trimmed.match(/^(answer|correct\s*answer):\s*(.*)$/i);
+      if (answerMatch) {
+        const val = answerMatch[2].trim();
+        
+        if (!isNaN(parseFloat(val)) && !val.includes(' ')) {
+          let nextLine = lines[i + 1] ? lines[i + 1].trim() : '';
+          let toleranceMatch = nextLine.match(/^(tolerance|margin):\s*(.*)$/i);
+          if (toleranceMatch) {
+            const marginVal = toleranceMatch[2].match(/(\d+\.?\d*%?)/);
+            if (marginVal) {
+              output.push(`= ${val} +- ${marginVal[1]}`);
+              i++;
+            } else {
+              output.push(`= ${val}`);
+            }
+          } else {
+            output.push(`= ${val}`);
+          }
+        } else {
+          output.push(`* ${val}`);
+        }
+        continue;
+      }
+
+      let acceptMatch = trimmed.match(/^(accept\s*also|accept):\s*(.*)$/i);
+      if (acceptMatch) {
+        output.push(`* ${acceptMatch[2].trim()}`);
+        continue;
+      }
+
+      output.push(line);
+    }
+
+    let cleanedOutput = [];
+    let prevEmpty = false;
+    for (let i = 0; i < output.length; i++) {
+      let line = output[i];
+      if (line.trim() === '') {
+        if (!prevEmpty) {
+          cleanedOutput.push('');
+          prevEmpty = true;
+        }
+      } else {
+        cleanedOutput.push(line);
+        prevEmpty = false;
+      }
+    }
+
+    return cleanedOutput.join('\n').trim();
+  }
+
+  /**
    * Main entry point to parse raw input string.
    * Automatically detects the format or accepts a preferred format.
    * @param {string} text - Raw input text
