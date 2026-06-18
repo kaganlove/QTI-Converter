@@ -103,6 +103,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnAddRow = document.getElementById('btn-add-row');
   const btnClearGrid = document.getElementById('btn-clear-grid');
 
+  // File Upload Elements
+  const uploadZone = document.getElementById('upload-zone');
+  const fileInput = document.getElementById('file-input');
+  const uploadZoneContent = document.getElementById('upload-zone-content');
+  const uploadFileInfo = document.getElementById('upload-file-info');
+  const uploadFileName = document.getElementById('upload-file-name');
+  const btnRemoveFile = document.getElementById('btn-remove-file');
+
   // Set initial input states
   quizTitleInput.value = state.quizOptions.title;
   quizDescInput.value = state.quizOptions.description;
@@ -113,6 +121,48 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize spreadsheet grid rows (start with 5 empty rows)
   initializeGrid(5);
+
+  // File Upload Event Listeners
+  uploadZone.addEventListener('click', (e) => {
+    if (e.target.closest('#btn-remove-file')) return;
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+      handleFileUpload(e.target.files[0]);
+    }
+  });
+
+  uploadZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadZone.classList.add('dragover');
+  });
+
+  uploadZone.addEventListener('dragleave', () => {
+    uploadZone.classList.remove('dragover');
+  });
+
+  uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) {
+      handleFileUpload(e.dataTransfer.files[0]);
+    }
+  });
+
+  btnRemoveFile.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fileInput.value = '';
+    uploadFileInfo.style.display = 'none';
+    uploadZoneContent.style.display = 'block';
+    
+    // Clear editors
+    textEditor.value = '';
+    initializeGrid(5);
+    triggerParse();
+    showToast("Uploaded file removed.", "info");
+  });
 
   // Tab switching
   tabMarkdown.addEventListener('click', () => {
@@ -645,5 +695,186 @@ document.addEventListener('DOMContentLoaded', () => {
         container.removeChild(toast);
       }, 300);
     }, 4000);
+  }
+
+  // File Processing Helpers
+  function handleFileUpload(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    
+    uploadFileName.innerText = file.name;
+    uploadZoneContent.style.display = 'none';
+    uploadFileInfo.style.display = 'flex';
+
+    showToast(`Processing file: ${file.name}...`, "info");
+
+    const reader = new FileReader();
+
+    if (ext === 'txt' || ext === 'csv' || ext === 'tsv') {
+      reader.onload = (e) => {
+        const text = e.target.result;
+        if (ext === 'csv' || ext === 'tsv') {
+          switchToSpreadsheetTab();
+          populateGridFromText(text, ext === 'csv' ? ',' : '\t');
+        } else {
+          switchToMarkdownTab();
+          textEditor.value = text;
+          triggerParse();
+        }
+      };
+      reader.readAsText(file);
+    } else if (ext === 'docx') {
+      reader.onload = (e) => {
+        const arrayBuffer = e.target.result;
+        if (!window.mammoth) {
+          showToast("Mammoth.js library is not loaded.", "error");
+          resetUploadUI();
+          return;
+        }
+        window.mammoth.extractRawText({ arrayBuffer: arrayBuffer })
+          .then((result) => {
+            switchToMarkdownTab();
+            textEditor.value = result.value;
+            triggerParse();
+            showToast("Word document text loaded successfully!", "success");
+          })
+          .catch((err) => {
+            showToast(`Word parsing failed: ${err.message}`, "error");
+            resetUploadUI();
+          });
+      };
+      reader.readAsArrayBuffer(file);
+    } else if (ext === 'pdf') {
+      reader.onload = async (e) => {
+        const arrayBuffer = e.target.result;
+        if (!window.pdfjsLib) {
+          showToast("PDF.js library is not loaded.", "error");
+          resetUploadUI();
+          return;
+        }
+        try {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+          const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+          const pdf = await loadingTask.promise;
+          
+          let fullText = '';
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const textContent = await page.getTextContent();
+            
+            let lastY = -1;
+            let pageText = '';
+            for (let item of textContent.items) {
+              if (lastY !== -1 && Math.abs(item.transform[5] - lastY) > 5) {
+                pageText += '\n';
+              }
+              pageText += item.str + ' ';
+              lastY = item.transform[5];
+            }
+            fullText += pageText + '\n';
+          }
+          
+          switchToMarkdownTab();
+          textEditor.value = fullText.trim();
+          triggerParse();
+          showToast("PDF text extracted successfully!", "success");
+        } catch (err) {
+          showToast(`PDF parsing failed: ${err.message}`, "error");
+          resetUploadUI();
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      reader.onload = (e) => {
+        const arrayBuffer = e.target.result;
+        if (!window.XLSX) {
+          showToast("SheetJS library is not loaded.", "error");
+          resetUploadUI();
+          return;
+        }
+        try {
+          const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const tsvText = window.XLSX.utils.sheet_to_txt(worksheet);
+
+          switchToSpreadsheetTab();
+          populateGridFromText(tsvText, '\t');
+          showToast("Excel spreadsheet mapped to grid successfully!", "success");
+        } catch (err) {
+          showToast(`Excel parsing failed: ${err.message}`, "error");
+          resetUploadUI();
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      showToast(`Unsupported file type: .${ext}`, "error");
+      resetUploadUI();
+    }
+  }
+
+  function resetUploadUI() {
+    fileInput.value = '';
+    uploadFileInfo.style.display = 'none';
+    uploadZoneContent.style.display = 'block';
+  }
+
+  function switchToMarkdownTab() {
+    tabMarkdown.classList.add('active');
+    tabSpreadsheet.classList.remove('active');
+    contentMarkdown.classList.add('active');
+    contentSpreadsheet.classList.remove('active');
+    state.format = 'auto';
+  }
+
+  // Define tab switcher for spreadsheet
+  function switchToSpreadsheetTab() {
+    tabSpreadsheet.classList.add('active');
+    tabMarkdown.classList.remove('active');
+    contentSpreadsheet.classList.add('active');
+    contentMarkdown.classList.remove('active');
+    state.format = 'tsv';
+  }
+
+  // Populate interactive grid from raw CSV or TSV text
+  function populateGridFromText(text, separator) {
+    const lines = text.split('\n');
+    if (lines.length === 0) return;
+
+    initializeGrid(0);
+
+    let startIdx = 0;
+    const firstLine = lines[0].toLowerCase();
+    if (firstLine.includes('question') || firstLine.includes('type') || firstLine.includes('points')) {
+      startIdx = 1;
+    }
+
+    for (let i = startIdx; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      let cells = [];
+      if (separator === ',') {
+        let current = '';
+        let inQuotes = false;
+        for (let j = 0; j < line.length; j++) {
+          const char = line[j];
+          if (char === '"') inQuotes = !inQuotes;
+          else if (char === ',' && !inQuotes) {
+            cells.push(current.trim().replace(/^"|"$/g, ''));
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        cells.push(current.trim().replace(/^"|"$/g, ''));
+      } else {
+        cells = line.split('\t');
+      }
+
+      addGridRow(cells);
+    }
+
+    addGridRow();
+    triggerParse();
   }
 });

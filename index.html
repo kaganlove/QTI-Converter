@@ -10,6 +10,12 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- JSZip CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- Mammoth.js for Word parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <!-- SheetJS for Excel parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <!-- PDF.js for PDF parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
   <!-- Stylesheet -->
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -56,6 +62,21 @@
       </div>
       
       <div class="panel-body">
+        <!-- File Upload Area -->
+        <div class="upload-zone" id="upload-zone">
+          <input type="file" id="file-input" style="display: none;" accept=".txt,.docx,.pdf,.csv,.tsv,.xlsx,.xls">
+          <div class="upload-zone-content" id="upload-zone-content">
+            <i class="fas fa-cloud-upload-alt" style="font-size: 2rem; color: var(--primary-color); margin-bottom: 0.5rem; display: block;"></i>
+            <p>Drag &amp; drop a file here or <span style="color: var(--primary-color); text-decoration: underline; font-weight: 500;">browse</span></p>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Supports Word (.docx), PDF (.pdf), Excel (.xlsx), CSV, TXT</p>
+          </div>
+          <div class="upload-file-info" id="upload-file-info" style="display: none; align-items: center; justify-content: center; gap: 0.75rem;">
+            <i class="fas fa-file-alt" style="color: var(--primary-color); font-size: 1.25rem;"></i>
+            <span id="upload-file-name" style="font-weight: 500; font-size: 0.9rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">file_name.docx</span>
+            <button id="btn-remove-file" class="btn-remove-file" style="background: transparent; border: none; color: var(--danger); cursor: pointer; padding: 0.25rem; font-size: 1rem;"><i class="fas fa-times"></i></button>
+          </div>
+        </div>
+
         <!-- Text Editor Tab Content -->
         <div class="tab-content active" id="content-markdown">
           <div class="editor-container">

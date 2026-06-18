@@ -806,3 +806,42 @@ footer {
   display: flex;
   justify-content: flex-end;
 }
+
+/* File Upload Zone Styles */
+.upload-zone {
+  border: 2px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.01);
+  cursor: pointer;
+  transition: var(--transition-normal);
+  margin-bottom: 1rem;
+  position: relative;
+}
+
+.upload-zone:hover, .upload-zone.dragover {
+  border-color: var(--primary-color);
+  background: rgba(26, 115, 232, 0.04);
+  box-shadow: 0 0 15px rgba(26, 115, 232, 0.05);
+}
+
+.upload-zone-content p {
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.upload-file-info {
+  background: rgba(26, 115, 232, 0.1);
+  border: 1px solid rgba(26, 115, 232, 0.25);
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  margin: 0 auto;
+}
+
+.btn-remove-file:hover {
+  transform: scale(1.15);
+  transition: transform var(--transition-fast);
+}
+
