@@ -13,7 +13,8 @@ const state = {
     oneQuestionAtATime: false,
     cantGoBack: false
   },
-  spreadsheetRows: []
+  spreadsheetRows: [],
+  approvedWarnings: new Set() // Track approved/dismissed warnings
 };
 
 // Initial Demo Content
@@ -169,6 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Clear editors
     textEditor.value = '';
     updateCharCount();
+    state.approvedWarnings.clear();
     initializeGrid(5);
     triggerParse();
     showToast("Uploaded file removed.", "info");
@@ -254,6 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Load Demo Content
   btnDemo.addEventListener('click', () => {
+    state.approvedWarnings.clear();
     if (contentMarkdown.classList.contains('active')) {
       textEditor.value = demoMarkdown;
       updateCharCount();
@@ -274,6 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
   btnClearGrid.addEventListener('click', () => {
     if (confirm("Are you sure you want to clear the spreadsheet data?")) {
       initializeGrid(5);
+      state.approvedWarnings.clear();
       triggerParse();
       showToast("Spreadsheet cleared.", "info");
     }
@@ -639,25 +643,89 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Helper to scroll the editor to a specific line and highlight it
+  function scrollToLine(lineNum) {
+    if (!textEditor || !lineNum) return;
+    if (!contentMarkdown.classList.contains('active')) {
+      switchToMarkdownTab();
+    }
+    
+    const text = textEditor.value;
+    const lines = text.split('\n');
+    if (lineNum > lines.length) return;
+    
+    let offset = 0;
+    for (let i = 0; i < lineNum - 1; i++) {
+      offset += lines[i].length + 1; // +1 for the newline character
+    }
+    
+    textEditor.focus();
+    const lineLength = lines[lineNum - 1].length;
+    textEditor.setSelectionRange(offset, offset + lineLength);
+    
+    const lineHeight = parseFloat(window.getComputedStyle(textEditor).lineHeight) || 20;
+    const topPos = (lineNum - 1) * lineHeight;
+    textEditor.scrollTop = topPos - (textEditor.clientHeight / 2);
+  }
+
   // Render compilation validator diagnostics logs
   function renderValidationLogs(errors, warnings) {
     alertContainer.innerHTML = '';
     
-    if (errors.length === 0 && warnings.length === 0) {
+    // Filter out warnings that have been approved/dismissed by the user
+    const activeWarnings = warnings.filter(warn => {
+      const key = `${warn.line || 0}|${warn.message}`;
+      return !state.approvedWarnings.has(key);
+    });
+
+    if (errors.length === 0 && activeWarnings.length === 0) {
       return;
     }
 
     errors.forEach(err => {
       const alert = document.createElement('div');
       alert.className = 'alert alert-error';
+      alert.title = err.line ? `Click to jump to line ${err.line}` : '';
       alert.innerHTML = `<i class="fas fa-exclamation-circle"></i> <div><strong>Line ${err.line || 'Unknown'}:</strong> ${err.message}</div>`;
+      
+      if (err.line) {
+        alert.addEventListener('click', () => {
+          scrollToLine(err.line);
+        });
+      }
+      
       alertContainer.appendChild(alert);
     });
 
-    warnings.forEach(warn => {
+    activeWarnings.forEach(warn => {
       const alert = document.createElement('div');
       alert.className = 'alert alert-warning';
-      alert.innerHTML = `<i class="fas fa-exclamation-triangle"></i> <div><strong>Line ${warn.line || 'Unknown'}:</strong> ${warn.message}</div>`;
+      alert.title = warn.line ? `Click to jump to line ${warn.line}` : '';
+      alert.innerHTML = `
+        <i class="fas fa-exclamation-triangle"></i> 
+        <div style="flex: 1;"><strong>Line ${warn.line || 'Unknown'}:</strong> ${warn.message}</div>
+        <button class="btn-approve-alert" title="Approve Warning"><i class="fas fa-check"></i></button>
+      `;
+
+      alert.addEventListener('click', (e) => {
+        if (e.target.closest('.btn-approve-alert')) return;
+        if (warn.line) {
+          scrollToLine(warn.line);
+        }
+      });
+
+      const approveBtn = alert.querySelector('.btn-approve-alert');
+      approveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = `${warn.line || 0}|${warn.message}`;
+        state.approvedWarnings.add(key);
+        
+        alert.classList.add('fade-out');
+        setTimeout(() => {
+          alert.remove();
+        }, 300);
+      });
+
       alertContainer.appendChild(alert);
     });
   }
@@ -729,6 +797,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // File Processing Helpers
   function handleFileUpload(file) {
+    state.approvedWarnings.clear();
     const ext = file.name.split('.').pop().toLowerCase();
     
     uploadFileName.innerText = file.name;
