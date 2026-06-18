@@ -14,7 +14,8 @@ const state = {
     cantGoBack: false
   },
   spreadsheetRows: [],
-  approvedWarnings: new Set() // Track approved/dismissed warnings
+  approvedWarnings: new Set(), // Track approved/dismissed warnings
+  isNavigatingToLine: false // Track if the editor has just navigated to an error/warning line
 };
 
 // Initial Demo Content
@@ -252,6 +253,22 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCharCount();
     clearTimeout(parseTimeout);
     parseTimeout = setTimeout(triggerParse, 400);
+  });
+
+  // Prevent accidental overwrite of highlighted error lines when user starts typing immediately after navigating
+  textEditor.addEventListener('mousedown', () => {
+    state.isNavigatingToLine = false;
+  });
+
+  textEditor.addEventListener('keydown', (e) => {
+    if (state.isNavigatingToLine && 
+        textEditor.selectionStart !== textEditor.selectionEnd && 
+        e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      
+      const end = textEditor.selectionEnd;
+      textEditor.setSelectionRange(end, end);
+      state.isNavigatingToLine = false;
+    }
   });
 
   // Load Demo Content
@@ -662,6 +679,7 @@ document.addEventListener('DOMContentLoaded', () => {
     textEditor.focus();
     const lineLength = lines[lineNum - 1].length;
     textEditor.setSelectionRange(offset, offset + lineLength);
+    state.isNavigatingToLine = true;
     
     try {
       const style = window.getComputedStyle(textEditor);

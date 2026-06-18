@@ -254,6 +254,63 @@ export class QuestionParser {
       output.push(line);
     }
 
+    // Post-process: Convert multiple correct answer MC/TF questions to MA syntax
+    let idx = 0;
+    while (idx < output.length) {
+      let line = output[idx];
+      let trimmed = line.trim();
+      
+      if (/^\d+\.\s*(.*)$/.test(trimmed)) {
+        let choiceLines = [];
+        let j = idx + 1;
+        
+        while (j < output.length) {
+          let nextLine = output[j];
+          let nextTrimmed = nextLine.trim();
+          
+          if (nextTrimmed === '') {
+            j++;
+            continue;
+          }
+          
+          if (/^\d+\.\s*(.*)$/.test(nextTrimmed) || nextTrimmed.match(sectionHeaderRegex)) {
+            break;
+          }
+          
+          const isMcChoice = nextTrimmed.match(/^(\*?)([a-zA-Z])[\s).:-]+\s*(.*)$/);
+          const isMaChoice = nextTrimmed.startsWith('[*]') || nextTrimmed.startsWith('[ ]');
+          
+          if (isMcChoice || isMaChoice) {
+            choiceLines.push({
+              index: j,
+              lineText: nextLine,
+              isCorrect: isMaChoice ? nextTrimmed.startsWith('[*]') : !!isMcChoice[1],
+              choiceContent: isMaChoice ? nextTrimmed.substring(3).trim() : isMcChoice[3]
+            });
+            j++;
+          } else {
+            j++;
+          }
+        }
+        
+        const correctCount = choiceLines.filter(c => c.isCorrect).length;
+        if (correctCount > 1) {
+          choiceLines.forEach(c => {
+            const nextTrimmed = output[c.index].trim();
+            if (!nextTrimmed.startsWith('[*]') && !nextTrimmed.startsWith('[ ]')) {
+              const prefix = c.isCorrect ? '[*]' : '[ ]';
+              const indent = output[c.index].match(/^\s*/)[0];
+              output[c.index] = `${indent}${prefix} ${c.choiceContent}`;
+            }
+          });
+        }
+        
+        idx = j;
+      } else {
+        idx++;
+      }
+    }
+
     let cleanedOutput = [];
     let prevEmpty = false;
     for (let i = 0; i < output.length; i++) {
