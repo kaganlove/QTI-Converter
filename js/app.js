@@ -1,5 +1,88 @@
-import { QuestionParser } from './parser.js';
-import { QTIGenerator } from './qti-generator.js';
+import { QuestionParser } from './parser.js?v=1.0.2';
+import { QTIGenerator } from './qti-generator.js?v=1.0.2';
+
+function escapeHtml(unsafe) {
+  if (unsafe === undefined || unsafe === null) return '';
+  return unsafe.toString()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function htmlToMarkdown(html) {
+  if (!html) return '';
+  
+  let docHtml = html;
+  
+  // Parse HTML to convert style-based bolding (e.g. font-weight: 700) to standard strong tags
+  if (typeof DOMParser !== 'undefined') {
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const allElements = doc.querySelectorAll('*');
+      
+      allElements.forEach(el => {
+        if (['HTML', 'HEAD', 'BODY'].includes(el.tagName)) return;
+        
+        const style = el.getAttribute('style') || '';
+        const isBoldStyle = /font-weight\s*:\s*(?:bold|700|800|900)/i.test(style);
+        
+        if (isBoldStyle && el.tagName !== 'STRONG' && el.tagName !== 'B') {
+          const strong = doc.createElement('strong');
+          while (el.firstChild) {
+            strong.appendChild(el.firstChild);
+          }
+          el.appendChild(strong);
+          el.style.fontWeight = '';
+        }
+      });
+      
+      docHtml = doc.body.innerHTML;
+    } catch (e) {
+      console.error("Error preprocessing HTML bold styles:", e);
+    }
+  }
+
+  let text = docHtml;
+  
+  // Strip <p> tags inside table cells to preserve cell structure on a single line
+  text = text.replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, (match, content) => {
+    const cleanedContent = content.replace(/<\/?p[^>]*>/gi, '').trim();
+    return `<td>${cleanedContent}</td>`;
+  });
+
+  // Standardize paragraph breaks, list items, headings, and tables
+  text = text.replace(/<\/p>/g, '\n\n');
+  text = text.replace(/<\/h[1-6]>/gi, '\n\n');
+  text = text.replace(/<\/div>/gi, '\n\n');
+  text = text.replace(/<\/tr>/g, '\n');
+  text = text.replace(/<\/td>/g, '\t');
+  text = text.replace(/<\/li>/g, '\n');
+  text = text.replace(/<br\s*\/?>/g, '\n');
+  
+  // Convert bold tags to **
+  text = text.replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**');
+  text = text.replace(/<b[^>]*>(.*?)<\/b>/gi, '**$1**');
+  
+  // Strip all other HTML tags
+  text = text.replace(/<[^>]+>/g, '');
+  
+  // Decode common HTML entities
+  text = text.replace(/&nbsp;/g, ' ')
+             .replace(/&amp;/g, '&')
+             .replace(/&lt;/g, '<')
+             .replace(/&gt;/g, '>')
+             .replace(/&quot;/g, '"')
+             .replace(/&#39;/g, "'")
+             .replace(/&apos;/g, "'");
+              
+  // Normalize multiple consecutive empty lines
+  text = text.replace(/\n{3,}/g, '\n\n');
+  
+  return text.trim();
+}
 
 // Application State
 const state = {
@@ -271,6 +354,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Intercept rich-text paste (from Word/web pages) to preserve bold choices and tables as clean markdown
+  textEditor.addEventListener('paste', (e) => {
+    const htmlData = e.clipboardData.getData('text/html');
+    if (htmlData && (htmlData.includes('class="Mso') || htmlData.includes('style=') || htmlData.includes('<strong>') || htmlData.includes('<b>') || htmlData.includes('<table>') || htmlData.includes('<li>'))) {
+      e.preventDefault();
+      const markdown = htmlToMarkdown(htmlData);
+      const cleaned = QuestionParser.cleanText(markdown);
+      
+      const start = textEditor.selectionStart;
+      const end = textEditor.selectionEnd;
+      const val = textEditor.value;
+      
+      textEditor.value = val.substring(0, start) + cleaned + val.substring(end);
+      textEditor.setSelectionRange(start + cleaned.length, start + cleaned.length);
+      
+      updateCharCount();
+      triggerParse();
+    }
+  });
+
   // Load Demo Content
   btnDemo.addEventListener('click', () => {
     state.approvedWarnings.clear();
@@ -471,8 +574,8 @@ document.addEventListener('DOMContentLoaded', () => {
       card.dataset.index = qIdx;
 
       // Header block
-      const typeLabel = getTypeLabel(q.type);
-      const typeClass = getTypeBadgeClass(q.type);
+      const typeLabel = getTypeLabel(q.type, q.isOrdering);
+      const typeClass = getTypeBadgeClass(q.type, q.isOrdering);
       
       const header = document.createElement('div');
       header.className = 'question-card-header';
@@ -546,6 +649,61 @@ document.addEventListener('DOMContentLoaded', () => {
         uploadSpec.className = 'choice-item';
         uploadSpec.innerHTML = `<i class="fas fa-cloud-upload-alt choice-icon choice-icon-incorrect"></i> <span class="choice-text" style="color: var(--text-muted)">File upload dropzone will be provided in Canvas.</span>`;
         card.appendChild(uploadSpec);
+      } else if (q.type === 'matching_question') {
+        const list = document.createElement('div');
+        list.className = 'matching-list';
+
+        // We need all possible right-side choices to display in the dropdown.
+        // The right-side choices are a combination of correct matches (m.right) and distractors.
+        const allRight = [...new Set([...q.matches.map(m => m.right), ...q.distractors])];
+        
+        // Shuffle the choices so they don't appear in the correct order in the dropdown (just like Canvas would display it!)
+        const shuffledOptions = [...allRight].sort(() => Math.random() - 0.5);
+
+        q.matches.forEach((m, mIdx) => {
+          const item = document.createElement('div');
+          item.className = 'matching-item';
+          
+          let selectHtml = `<select class="matching-select" disabled>`;
+          selectHtml += `<option value="">[ Choose Match ]</option>`;
+          shuffledOptions.forEach(opt => {
+            selectHtml += `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`;
+          });
+          selectHtml += `</select>`;
+
+          item.innerHTML = `
+            <span class="matching-stem editable" data-field="match-left" data-qindex="${qIdx}" data-mindex="${mIdx}">${escapeHtml(m.left)}</span>
+            <div class="matching-target">
+              ${selectHtml}
+              <span class="matching-correct-pill">
+                <i class="fas fa-arrow-right"></i> Correct: <span class="editable" data-field="match-right" data-qindex="${qIdx}" data-mindex="${mIdx}">${escapeHtml(m.right)}</span>
+              </span>
+            </div>
+          `;
+          list.appendChild(item);
+        });
+
+        // If there are distractors, display them!
+        if (q.distractors && q.distractors.length > 0) {
+          const distractorDiv = document.createElement('div');
+          distractorDiv.className = 'matching-distractors';
+          distractorDiv.innerHTML = `<strong>Distractors:</strong> `;
+          q.distractors.forEach((d, dIdx) => {
+            const span = document.createElement('span');
+            span.className = 'distractor-pill editable';
+            span.dataset.field = 'distractor';
+            span.dataset.qindex = qIdx;
+            span.dataset.dindex = dIdx;
+            span.innerText = d;
+            distractorDiv.appendChild(span);
+            if (dIdx < q.distractors.length - 1) {
+              distractorDiv.appendChild(document.createTextNode(', '));
+            }
+          });
+          list.appendChild(distractorDiv);
+        }
+
+        card.appendChild(list);
       }
 
       // Add general feedbacks
@@ -617,6 +775,36 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             renderPreview();
           });
+        } else if (field === 'match-left') {
+          const qIdx = parseInt(this.dataset.qindex);
+          const mIdx = parseInt(this.dataset.mindex);
+          input.value = state.questions[qIdx].matches[mIdx].left;
+          input.addEventListener('blur', function() {
+            if (this.value.trim()) {
+              state.questions[qIdx].matches[mIdx].left = this.value.trim();
+            }
+            renderPreview();
+          });
+        } else if (field === 'match-right') {
+          const qIdx = parseInt(this.dataset.qindex);
+          const mIdx = parseInt(this.dataset.mindex);
+          input.value = state.questions[qIdx].matches[mIdx].right;
+          input.addEventListener('blur', function() {
+            if (this.value.trim()) {
+              state.questions[qIdx].matches[mIdx].right = this.value.trim();
+            }
+            renderPreview();
+          });
+        } else if (field === 'distractor') {
+          const qIdx = parseInt(this.dataset.qindex);
+          const dIdx = parseInt(this.dataset.dindex);
+          input.value = state.questions[qIdx].distractors[dIdx];
+          input.addEventListener('blur', function() {
+            if (this.value.trim()) {
+              state.questions[qIdx].distractors[dIdx] = this.value.trim();
+            }
+            renderPreview();
+          });
         }
 
         input.addEventListener('keydown', function(e) {
@@ -634,7 +822,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Type labels translations
-  function getTypeLabel(type) {
+  function getTypeLabel(type, isOrdering = false) {
     switch (type) {
       case 'multiple_choice_question': return 'Multiple Choice';
       case 'true_false_question': return 'True/False';
@@ -643,11 +831,12 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'numerical_question': return 'Numerical';
       case 'essay_question': return 'Essay';
       case 'file_upload_question': return 'File Upload';
+      case 'matching_question': return isOrdering ? 'Ordering' : 'Matching';
       default: return 'Question';
     }
   }
 
-  function getTypeBadgeClass(type) {
+  function getTypeBadgeClass(type, isOrdering = false) {
     switch (type) {
       case 'multiple_choice_question': return 'badge-mc';
       case 'true_false_question': return 'badge-tf';
@@ -656,6 +845,7 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'numerical_question': return 'badge-num';
       case 'essay_question': return 'badge-essay';
       case 'file_upload_question': return 'badge-upload';
+      case 'matching_question': return isOrdering ? 'badge-ordering' : 'badge-matching';
       default: return '';
     }
   }
@@ -873,7 +1063,8 @@ document.addEventListener('DOMContentLoaded', () => {
           populateGridFromText(text, ext === 'csv' ? ',' : '\t');
         } else {
           switchToMarkdownTab();
-          textEditor.value = text;
+          const cleaned = QuestionParser.cleanText(text);
+          textEditor.value = cleaned;
           updateCharCount();
           triggerParse();
         }
@@ -887,13 +1078,15 @@ document.addEventListener('DOMContentLoaded', () => {
           resetUploadUI();
           return;
         }
-        window.mammoth.extractRawText({ arrayBuffer: arrayBuffer })
+        window.mammoth.convertToHtml({ arrayBuffer: arrayBuffer })
           .then((result) => {
+            const markdown = htmlToMarkdown(result.value);
+            const cleaned = QuestionParser.cleanText(markdown);
             switchToMarkdownTab();
-            textEditor.value = result.value;
+            textEditor.value = cleaned;
             updateCharCount();
             triggerParse();
-            showToast("Word document text loaded successfully!", "success");
+            showToast("Word document text and formatting loaded successfully!", "success");
           })
           .catch((err) => {
             showToast(`Word parsing failed: ${err.message}`, "error");

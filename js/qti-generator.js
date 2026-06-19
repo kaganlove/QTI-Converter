@@ -223,6 +223,13 @@ export class QTIGenerator {
               <fieldlabel>original_answer_ids</fieldlabel>
               <fieldentry>${choiceIds}</fieldentry>
             </qtimetadatafield>`;
+      } else if (q.type === 'matching_question') {
+        const stemIds = q.matches.map((_, sIdx) => `stem_${sIdx + 1}_${qId}`).join(',');
+        assessmentXml += `
+            <qtimetadatafield>
+              <fieldlabel>original_answer_ids</fieldlabel>
+              <fieldentry>${stemIds}</fieldentry>
+            </qtimetadatafield>`;
       } else if (q.type === 'numerical_question') {
         assessmentXml += `
             <qtimetadatafield>
@@ -289,6 +296,37 @@ export class QTIGenerator {
               <response_label ident="answer1"/>
             </render_fib>
           </response_str>`;
+      } else if (q.type === 'matching_question') {
+        const allRight = [...new Set([...q.matches.map(m => m.right), ...q.distractors])];
+        const matchOptions = allRight.map((text, cIdx) => ({
+          id: `match_${cIdx + 1}_${qId}`,
+          text: text
+        }));
+        
+        q.matchOptions = matchOptions;
+        
+        q.matches.forEach((matchPair, sIdx) => {
+          const stemId = `stem_${sIdx + 1}_${qId}`;
+          assessmentXml += `
+          <response_lid ident="response_${stemId}" rcardinality="Single">
+            <material>
+              <mattext texttype="text/html">${escapeXml(mdToHtml(matchPair.left))}</mattext>
+            </material>
+            <render_choice>`;
+            
+          matchOptions.forEach(option => {
+            assessmentXml += `
+              <response_label ident="${option.id}">
+                <material>
+                  <mattext texttype="text/html">${escapeXml(mdToHtml(option.text))}</mattext>
+                </material>
+              </response_label>`;
+          });
+          
+          assessmentXml += `
+            </render_choice>
+          </response_lid>`;
+        });
       }
 
       assessmentXml += `
@@ -338,6 +376,43 @@ export class QTIGenerator {
               <varequal respident="response1">${correctChoiceId}</varequal>
             </conditionvar>
             <setvar action="Set" varname="SCORE">100</setvar>${feedbackRef ? `\n            <displayfeedback feedbacktype="Response" linkrefid="${feedbackRef}"/>` : ''}
+          </respcondition>`;
+        }
+      } else if (q.type === 'matching_question') {
+        const feedbackRef = q.correctFeedback ? 'correct_fb' : '';
+        const pointsPerMatch = (100 / q.matches.length).toFixed(2);
+        
+        q.matches.forEach((matchPair, sIdx) => {
+          const stemId = `stem_${sIdx + 1}_${qId}`;
+          const correctOption = q.matchOptions.find(o => o.text === matchPair.right);
+          if (correctOption) {
+            assessmentXml += `
+          <respcondition continue="Yes">
+            <conditionvar>
+              <varequal respident="response_${stemId}">${correctOption.id}</varequal>
+            </conditionvar>
+            <setvar action="Add" varname="SCORE">${pointsPerMatch}</setvar>
+          </respcondition>`;
+          }
+        });
+        
+        if (feedbackRef) {
+          assessmentXml += `
+          <respcondition continue="Yes">
+            <conditionvar>
+              <and>`;
+          q.matches.forEach((matchPair, sIdx) => {
+            const stemId = `stem_${sIdx + 1}_${qId}`;
+            const correctOption = q.matchOptions.find(o => o.text === matchPair.right);
+            if (correctOption) {
+              assessmentXml += `
+                <varequal respident="response_${stemId}">${correctOption.id}</varequal>`;
+            }
+          });
+          assessmentXml += `
+              </and>
+            </conditionvar>
+            <displayfeedback feedbacktype="Response" linkrefid="${feedbackRef}"/>
           </respcondition>`;
         }
       } else if (q.type === 'multiple_answers_question') {

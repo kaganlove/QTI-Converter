@@ -1,7 +1,86 @@
-/**
- * QTI Converter - Parser Module
- * Handles parsing of Aiken, text2qti Markdown, and Tabular CSV/TSV formats.
- */
+function splitInlineChoices(trimmed) {
+  const entireBoldRegex = /^\*\*\s*(.*?)\s*\*\*$/;
+  let checkTrimmed = trimmed;
+  let isWholeBold = false;
+  if (entireBoldRegex.test(trimmed)) {
+    checkTrimmed = trimmed.replace(entireBoldRegex, '$1').trim();
+    isWholeBold = true;
+  }
+  
+  let firstPrefix = '';
+  if (checkTrimmed.startsWith('**')) {
+    firstPrefix = '**';
+    checkTrimmed = checkTrimmed.substring(2).trim();
+  } else if (checkTrimmed.startsWith('*')) {
+    firstPrefix = '*';
+    checkTrimmed = checkTrimmed.substring(1).trim();
+  }
+
+  const match = checkTrimmed.match(/^([a-zA-Z])[\s).:-]+\s*(.*)$/);
+  if (!match) return null;
+  const firstLetter = match[1].toLowerCase();
+  const text = match[2].trim();
+  
+  let nextLetterCode = firstLetter.charCodeAt(0) + 1;
+  let parts = [];
+  let currentIdx = 0;
+  
+  while (nextLetterCode <= 122) {
+    const letterChar = String.fromCharCode(nextLetterCode);
+    const regex = new RegExp(`(?:^|\\s)(\\*\\*|\\*)?(${letterChar})[\\s).:-]+\\s*`, 'i');
+    const searchArea = text.substring(currentIdx);
+    const matchIdx = searchArea.search(regex);
+    if (matchIdx !== -1) {
+      const absoluteIdx = currentIdx + matchIdx;
+      const matchResult = searchArea.match(regex);
+      const matchStr = matchResult[0];
+      const hasAsterisk = !!matchResult[1];
+      
+      parts.push({
+        letter: letterChar,
+        index: absoluteIdx + (matchStr.startsWith(' ') ? 1 : 0),
+        length: matchStr.trim().length,
+        isCorrect: hasAsterisk || isWholeBold
+      });
+      currentIdx = absoluteIdx + matchStr.length;
+      nextLetterCode++;
+    } else {
+      break;
+    }
+  }
+  
+  if (parts.length > 0) {
+    const choices = [];
+    let firstText = text.substring(0, parts[0].index).trim();
+    const isFirstCorrect = firstPrefix !== '' || isWholeBold;
+    if (isFirstCorrect && firstText.endsWith('**')) {
+      firstText = firstText.substring(0, firstText.length - 2).trim();
+    }
+    choices.push({ 
+      letter: firstLetter, 
+      text: firstText, 
+      isCorrect: isFirstCorrect 
+    });
+    
+    for (let i = 0; i < parts.length; i++) {
+      const start = parts[i].index + parts[i].length;
+      const end = (i + 1 < parts.length) ? parts[i + 1].index : text.length;
+      let partText = text.substring(start, end).trim();
+      
+      if (parts[i].isCorrect && partText.endsWith('**')) {
+        partText = partText.substring(0, partText.length - 2).trim();
+      }
+      
+      choices.push({ 
+        letter: parts[i].letter, 
+        text: partText, 
+        isCorrect: parts[i].isCorrect 
+      });
+    }
+    return choices;
+  }
+  return null;
+}
 
 export class QuestionParser {
   constructor() {
@@ -20,17 +99,124 @@ export class QuestionParser {
     // Normalize newlines
     let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     let lines = normalized.split('\n');
+
+    // Detect table-embedded question blocks (Section L)
+    for (let idx = 0; idx < lines.length; idx++) {
+      const line = lines[idx].trim();
+      if (line === '#' || line.toLowerCase() === 'no.' || line.toLowerCase() === 'id') {
+        let peekIdx = idx + 1;
+        let foundQuestion = false;
+        let choiceHeaders = [];
+        
+        while (peekIdx < Math.min(lines.length, idx + 5)) {
+          const l = lines[peekIdx].trim();
+          if (l === '') { peekIdx++; continue; }
+          if (l.toLowerCase() === 'question' || l.toLowerCase() === 'prompt' || l.toLowerCase() === 'text') {
+            foundQuestion = true;
+            peekIdx++;
+            break;
+          }
+          break;
+        }
+        
+        if (foundQuestion) {
+          while (peekIdx < Math.min(lines.length, idx + 10)) {
+            const l = lines[peekIdx].trim();
+            if (l === '') { peekIdx++; continue; }
+            if (/^[a-fA-F]$/.test(l) || /^choice\s*[a-fA-F0-9]$/i.test(l)) {
+              choiceHeaders.push(l);
+              peekIdx++;
+            } else {
+              break;
+            }
+          }
+        }
+        
+        if (foundQuestion && choiceHeaders.length >= 2) {
+          const numChoices = choiceHeaders.length;
+          let rIdx = peekIdx;
+          let processedLines = [];
+          
+          while (rIdx < lines.length) {
+            while (rIdx < lines.length && lines[rIdx].trim() === '') { rIdx++; }
+            if (rIdx >= lines.length) break;
+            
+            const numLine = lines[rIdx].trim();
+            if (!/^\d+$/.test(numLine)) {
+              break;
+            }
+            
+            let qTextIdx = rIdx + 1;
+            while (qTextIdx < lines.length && lines[qTextIdx].trim() === '') { qTextIdx++; }
+            if (qTextIdx >= lines.length) break;
+            const qText = lines[qTextIdx].trim();
+            
+            let choiceLines = [];
+            let cIdx = qTextIdx + 1;
+            for (let c = 0; c < numChoices; c++) {
+              while (cIdx < lines.length && lines[cIdx].trim() === '') { cIdx++; }
+              if (cIdx >= lines.length) break;
+              choiceLines.push(lines[cIdx].trim());
+              cIdx++;
+            }
+            
+            if (choiceLines.length === numChoices) {
+              processedLines.push(`${numLine}. ${qText}`);
+              choiceLines.forEach((choice, cIndex) => {
+                let isCorrect = false;
+                let cText = choice;
+                if (cText.startsWith('*')) {
+                  isCorrect = true;
+                  cText = cText.substring(1).trim();
+                }
+                const letter = String.fromCharCode(97 + cIndex);
+                const prefix = isCorrect ? '*' : '';
+                processedLines.push(`${prefix}${letter}) ${cText}`);
+              });
+              processedLines.push('');
+              rIdx = cIdx;
+            } else {
+              break;
+            }
+          }
+          
+          if (processedLines.length > 0) {
+            lines.splice(idx, rIdx - idx, ...processedLines);
+            idx += processedLines.length - 1;
+          }
+        }
+      }
+    }
     
-    // 1. Scan for Answer Key at the bottom
+    // 1. Scan for Answer Keys anywhere in the text (grouped and standard formats)
     const answerKeyMap = {};
+    const answerKeyLines = new Set();
     const answerKeyRegex = /(answer\s*key|answers):\s*(.*)$/i;
-    let answerKeyLineIdx = -1;
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      const match = line.match(answerKeyRegex);
+      if (!line) continue;
+      
+      const cleanLineForMatch = line.replace(/\*\*/g, '').trim();
+      
+      // Look for grouped format: a) correct: Q1, Q3, Q6
+      const groupMatch = cleanLineForMatch.match(/^\s*([a-zA-Z])\)?\s*(?:correct|answers?):\s*(.*)$/i);
+      if (groupMatch) {
+        answerKeyLines.add(i);
+        const letter = groupMatch[1].toUpperCase();
+        const qNums = groupMatch[2].match(/\d+/g);
+        if (qNums) {
+          qNums.forEach(num => {
+            answerKeyMap[num] = letter;
+          });
+        }
+        continue;
+      }
+      
+      // Check standard answer keys
+      const match = cleanLineForMatch.match(answerKeyRegex);
       if (match) {
-        answerKeyLineIdx = i;
+        answerKeyLines.add(i);
         const keyContent = match[2];
         const pairs = keyContent.match(/(\d+)[\s.:-]*([a-zA-Z])/g);
         if (pairs) {
@@ -47,16 +233,18 @@ export class QuestionParser {
     let output = [];
     let currentQuestionNum = null;
     let currentCorrectLetter = null;
+    let choiceCount = 0;
 
-    const questionStartRegex = /^(\d+)\.\s*(.*)$/;
+    const questionStartRegex = /^(\d+)[\s).:-]+\s*(.*)$/;
     const choiceRegex = /^([a-zA-Z])[\s).:-]+\s*(.*)$/;
+    const romanChoiceRegex = /^(\*?)(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i;
     const sectionHeaderRegex = /^(section|part|chapter|unit)\s+\w+[\s-:]*/i;
 
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i];
       let trimmed = line.trim();
 
-      if (i === answerKeyLineIdx) {
+      if (answerKeyLines.has(i)) {
         output.push('% ' + line);
         continue;
       }
@@ -66,8 +254,44 @@ export class QuestionParser {
         continue;
       }
 
+      const entireBoldRegex = /^\*\*\s*(.*?)\s*\*\*$/;
+      let checkTrimmed = trimmed;
+      let isBoldLine = false;
+      if (entireBoldRegex.test(trimmed)) {
+        checkTrimmed = trimmed.replace(entireBoldRegex, '$1').trim();
+        isBoldLine = true;
+      }
+
+      if (checkTrimmed.includes('\t')) {
+        const cells = checkTrimmed.split('\t').map(c => c.trim()).filter(c => c.length > 0);
+        if (cells.length > 0 && (cells[0] === '#' || cells[0].toLowerCase() === 'no.' || cells[0].toLowerCase() === 'id')) {
+          output.push('% ' + line);
+          continue;
+        }
+        if (cells.length >= 3 && /^\d+$/.test(cells[0])) {
+          const qNum = cells[0];
+          const qText = cells[1];
+          const choices = cells.slice(2);
+          
+          output.push(`${qNum}. ${qText}`);
+          choices.forEach((choice, idx) => {
+            let isCorrect = false;
+            let choiceText = choice;
+            if (choiceText.startsWith('*')) {
+              isCorrect = true;
+              choiceText = choiceText.substring(1).trim();
+            }
+            const letter = String.fromCharCode(97 + idx);
+            const prefix = isCorrect ? '*' : '';
+            output.push(`${prefix}${letter}) ${choiceText}`);
+          });
+          output.push('');
+          continue;
+        }
+      }
+
       // Heuristic: ignore section headers and prevent them from appending to previous questions
-      if (trimmed.match(sectionHeaderRegex)) {
+      if (checkTrimmed.match(sectionHeaderRegex)) {
         output.push('');
         output.push('% ' + trimmed);
         output.push('');
@@ -77,8 +301,8 @@ export class QuestionParser {
       }
 
       // Heuristic: Table question detection (number on a line by itself, followed by text, followed by choices)
-      if (/^\d+$/.test(trimmed)) {
-        const qNum = trimmed;
+      if (/^\d+$/.test(checkTrimmed)) {
+        const qNum = checkTrimmed;
         let qTextLineIdx = -1;
         
         // Find the next non-empty line as question text
@@ -133,11 +357,12 @@ export class QuestionParser {
         }
       }
 
-      let qMatch = trimmed.match(questionStartRegex);
+      let qMatch = checkTrimmed.match(questionStartRegex);
       if (qMatch) {
         currentQuestionNum = qMatch[1];
         let qText = qMatch[2];
         currentCorrectLetter = null;
+        choiceCount = 0;
 
         let inlineCorrectMatch = qText.match(/(.*?)\s*\[(correct|answer):\s*([a-zA-Z])\]\s*$/i);
         if (inlineCorrectMatch) {
@@ -154,7 +379,8 @@ export class QuestionParser {
           qText = inlineTfMatch[1].trim();
           const tfAnswer = inlineTfMatch[2].toLowerCase();
           
-          output.push(`${currentQuestionNum}. ${qText}`);
+          const textToPush = isBoldLine ? `**${qText}**` : qText;
+          output.push(`${currentQuestionNum}. ${textToPush}`);
           if (tfAnswer === 'true') {
             output.push('*a) True');
             output.push('b) False');
@@ -165,18 +391,209 @@ export class QuestionParser {
           continue;
         }
 
-        output.push(`${currentQuestionNum}. ${qText}`);
+        // Peek ahead to see if this is a matching question in table format or an ordering list!
+        let isMatchingTable = false;
+        let isOrderingList = false;
+        
+        let peekLines = [];
+        let peekIndices = [];
+        for (let k = i + 1; k < Math.min(lines.length, i + 60); k++) {
+          const l = lines[k].trim();
+          if (l !== '') {
+            peekLines.push(l);
+            peekIndices.push(k);
+          }
+        }
+        
+        const isOrderingPrompt = /order|sequence|arrange|sort/i.test(qText);
+        if (isOrderingPrompt && peekLines.length >= 2 && peekLines.slice(0, 5).every((l) => {
+          return /^\d+[\s).:-]/.test(l);
+        })) {
+          isOrderingList = true;
+        }
+        
+        const isMatchingPrompt = /match|description|term|associate/i.test(qText);
+        let hasTabSeparated = peekLines.length >= 2 && peekLines.slice(0, 5).some(l => l.includes('\t'));
+        
+        if (isMatchingPrompt || hasTabSeparated) {
+          const isStandardChoices = peekLines.length >= 2 && peekLines.slice(0, 2).every(l => choiceRegex.test(l) || splitInlineChoices(l));
+          if (!isStandardChoices) {
+            isMatchingTable = true;
+          }
+        }
+        
+        if (isOrderingList) {
+          const textToPush = isBoldLine ? `**${qText}**` : qText;
+          output.push(`${currentQuestionNum}. ${textToPush}`);
+          let lastK = i;
+          for (let idx = 0; idx < peekLines.length; idx++) {
+            const l = peekLines[idx];
+            if (!/^\d+[\s).:-]/.test(l)) {
+              break;
+            }
+            const stepText = l.replace(/^\d+[\s).:-]+\s*/, '');
+            output.push(`~ ${stepText}`);
+            lastK = peekIndices[idx];
+          }
+          i = lastK;
+          continue;
+        }
+        
+        if (isMatchingTable) {
+          const textToPush = isBoldLine ? `**${qText}**` : qText;
+          output.push(`${currentQuestionNum}. ${textToPush}`);
+          let lastK = i;
+          
+          if (hasTabSeparated) {
+            for (let idx = 0; idx < peekLines.length; idx++) {
+              const l = peekLines[idx];
+              if (/^\d+\./.test(l) || /^(section|part|chapter|unit)\s+/i.test(l)) {
+                break;
+              }
+              const cells = l.split('\t').map(c => c.trim()).filter(c => c.length > 0);
+              if (cells.length >= 2) {
+                if (idx === 0 && /term|match|distractor|correct/i.test(cells[0]) && /term|match|distractor|correct/i.test(cells[1])) {
+                  lastK = peekIndices[idx];
+                  continue;
+                }
+                output.push(`> ${cells[0]} -> ${cells[1]}`);
+                if (cells[2]) {
+                  output.push(`> _ -> ${cells[2]}`);
+                }
+                lastK = peekIndices[idx];
+              } else {
+                break;
+              }
+            }
+          } else {
+            let startIdx = 0;
+            if (peekLines.length >= 3 && 
+                /term|prompt/i.test(peekLines[0]) && 
+                /match|correct/i.test(peekLines[1])
+            ) {
+              if (/distractor|notes/i.test(peekLines[2])) {
+                startIdx = 3;
+              } else {
+                startIdx = 2;
+              }
+            }
+            
+            const dataLines = peekLines.slice(startIdx);
+            const dataIndices = peekIndices.slice(startIdx);
+            
+            let step = 2;
+            if (dataLines.length >= 3 && peekLines.length >= 3 && /distractor|notes/i.test(peekLines[2])) {
+              step = 3;
+            }
+            
+            for (let k = 0; k < dataLines.length; k += step) {
+              const termLine = dataLines[k];
+              if (!termLine || /^\d+\./.test(termLine.trim()) || /^(section|part|chapter|unit)\s+/i.test(termLine.trim())) {
+                break;
+              }
+              
+              if (k + 1 < dataLines.length) {
+                const term = termLine;
+                const match = dataLines[k+1];
+                
+                if (/^\d+\./.test(match.trim()) || /^(section|part|chapter|unit)\s+/i.test(match.trim())) {
+                  break;
+                }
+                
+                output.push(`> ${term} -> ${match}`);
+                
+                if (step === 3 && k + 2 < dataLines.length) {
+                  const distractor = dataLines[k+2];
+                  if (distractor && /^\d+\./.test(distractor.trim())) {
+                    break;
+                  }
+                  if (distractor && distractor.trim() && distractor.trim() !== '_') {
+                    output.push(`> _ -> ${distractor}`);
+                  }
+                  lastK = dataIndices[Math.min(k + step - 1, dataLines.length - 1)];
+                } else {
+                  lastK = dataIndices[Math.min(k + 1, dataLines.length - 1)];
+                }
+              } else {
+                break;
+              }
+            }
+          }
+          i = lastK;
+          continue;
+        }
+
+        const textToPush = isBoldLine ? `**${qText}**` : qText;
+        output.push(`${currentQuestionNum}. ${textToPush}`);
         continue;
       }
 
-      let cMatch = trimmed.match(choiceRegex);
-      if (cMatch && !/^\d+/.test(trimmed)) {
-        let letter = cMatch[1].toUpperCase();
-        let choiceText = cMatch[2].trim();
+      // Check separate-line correct answer declarations: * A, * B, Correct: A
+      let correctMatch = checkTrimmed.match(/^(?:\*|correct|answer):\s*([a-zA-Z])\s*$/i);
+      if (correctMatch) {
+        const correctLetter = correctMatch[1].toLowerCase();
+        let choiceLines = [];
+        let questionIdx = -1;
+        for (let k = output.length - 1; k >= 0; k--) {
+          const outLine = output[k].trim();
+          if (outLine.match(/^\d+[\s).:-]+\s*(.*)$/)) {
+            questionIdx = k;
+            break;
+          }
+          const choiceMatch = outLine.match(/^([a-zA-Z])[\s).:-]+\s*(.*)$/);
+          if (choiceMatch) {
+            choiceLines.unshift({ index: k, letter: choiceMatch[1].toLowerCase() });
+          }
+        }
         
-        let isCorrect = false;
+        let matchedChoice = choiceLines.find(c => c.letter === correctLetter);
+        if (!matchedChoice) {
+          const charIndex = correctLetter.charCodeAt(0) - 97;
+          if (charIndex >= 0 && charIndex < choiceLines.length) {
+            matchedChoice = choiceLines[charIndex];
+          }
+        }
+        
+        if (matchedChoice) {
+          output[matchedChoice.index] = '*' + output[matchedChoice.index].trim();
+        }
+        continue;
+      }
 
-        if (currentCorrectLetter && letter === currentCorrectLetter) {
+      // Check inline choices
+      const inlineChoices = splitInlineChoices(trimmed);
+      if (inlineChoices) {
+        inlineChoices.forEach(c => {
+          let isCorrect = false;
+          if (currentCorrectLetter && c.letter.toUpperCase() === currentCorrectLetter) {
+            isCorrect = true;
+          }
+          const prefix = isCorrect ? '*' : '';
+          output.push(`${prefix}${c.letter}) ${c.text}`);
+        });
+        continue;
+      }
+
+      let isBoldChoice = isBoldLine;
+
+      // Strip leading asterisk * if present (indicating correct choice)
+      let hasLeadingAsterisk = false;
+      if (checkTrimmed.startsWith('*') && !checkTrimmed.startsWith('**')) {
+        checkTrimmed = checkTrimmed.substring(1).trim();
+        hasLeadingAsterisk = true;
+      }
+
+      // Check roman numeral choices
+      let rMatch = checkTrimmed.match(romanChoiceRegex);
+      if (rMatch && !/^\d+/.test(checkTrimmed)) {
+        let isCorrect = isBoldChoice || hasLeadingAsterisk;
+        let choiceText = rMatch[3].trim();
+
+        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
+          isCorrect = true;
+        } else if (entireBoldRegex.test(choiceText)) {
+          choiceText = choiceText.replace(entireBoldRegex, '$1').trim();
           isCorrect = true;
         }
 
@@ -186,12 +603,55 @@ export class QuestionParser {
           isCorrect = true;
         }
 
-        if (trimmed.startsWith('*')) {
+        if (trimmed.startsWith('*') || checkTrimmed.startsWith('*')) {
+          isCorrect = true;
+        }
+
+        const letter = String.fromCharCode(97 + choiceCount);
+        choiceCount++;
+
+        const prefix = isCorrect ? '*' : '';
+        output.push(`${prefix}${letter}) ${choiceText}`);
+        continue;
+      }
+
+      let cMatch = checkTrimmed.match(choiceRegex);
+      if (cMatch && !/^\d+/.test(checkTrimmed)) {
+        let letter = cMatch[1].toUpperCase();
+        let choiceText = cMatch[2].trim();
+        
+        const stdLetter = String.fromCharCode(97 + choiceCount);
+        choiceCount++;
+
+        let isCorrect = isBoldChoice || hasLeadingAsterisk;
+
+        if (currentCorrectLetter) {
+          const targetLetter = currentCorrectLetter.toLowerCase();
+          if (targetLetter === stdLetter || targetLetter.charCodeAt(0) - 97 === (choiceCount - 1)) {
+            isCorrect = true;
+          }
+        }
+
+        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
+          isCorrect = true;
+        } else if (entireBoldRegex.test(choiceText)) {
+          choiceText = choiceText.replace(entireBoldRegex, '$1').trim();
+          isCorrect = true;
+        }
+
+        let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
+        if (suffixCorrectMatch) {
+          choiceText = suffixCorrectMatch[1].trim();
+          isCorrect = true;
+        }
+
+        if (trimmed.startsWith('*') || checkTrimmed.startsWith('*')) {
           isCorrect = true;
         }
 
         const prefix = isCorrect ? '*' : '';
-        output.push(`${prefix}${letter.toLowerCase()}) ${choiceText}`);
+        output.push(`${prefix}${stdLetter}) ${choiceText}`);
         continue;
       }
 
@@ -204,19 +664,26 @@ export class QuestionParser {
         continue;
       }
 
-      if (trimmed === '*True' || trimmed === '*true') {
+      let isBoldTf = false;
+      let tfText = trimmed;
+      if (entireBoldRegex.test(trimmed)) {
+        tfText = trimmed.replace(entireBoldRegex, '$1').trim();
+        isBoldTf = true;
+      }
+
+      if (tfText === '*True' || tfText === '*true' || (tfText.toLowerCase() === 'true' && isBoldTf)) {
         output.push('*a) True');
         continue;
       }
-      if (trimmed === 'True' || trimmed === 'true') {
+      if (tfText === 'True' || tfText === 'true') {
         output.push('a) True');
         continue;
       }
-      if (trimmed === '*False' || trimmed === '*false') {
+      if (tfText === '*False' || tfText === '*false' || (tfText.toLowerCase() === 'false' && isBoldTf)) {
         output.push('*b) False');
         continue;
       }
-      if (trimmed === 'False' || trimmed === 'false') {
+      if (tfText === 'False' || tfText === 'false') {
         output.push('b) False');
         continue;
       }
@@ -251,6 +718,17 @@ export class QuestionParser {
         continue;
       }
 
+      let expectedKeywordsMatch = trimmed.match(/^expected\s*(keywords|answers?):\s*(.*)$/i);
+      if (expectedKeywordsMatch) {
+        const keywords = expectedKeywordsMatch[2].split(/[,;]/).map(k => k.trim());
+        keywords.forEach(keyword => {
+          if (keyword) {
+            output.push(`* ${keyword}`);
+          }
+        });
+        continue;
+      }
+
       output.push(line);
     }
 
@@ -260,7 +738,7 @@ export class QuestionParser {
       let line = output[idx];
       let trimmed = line.trim();
       
-      if (/^\d+\.\s*(.*)$/.test(trimmed)) {
+      if (/^\d+[\s).:-]+\s*(.*)$/.test(trimmed)) {
         let choiceLines = [];
         let j = idx + 1;
         
@@ -273,11 +751,11 @@ export class QuestionParser {
             continue;
           }
           
-          if (/^\d+\.\s*(.*)$/.test(nextTrimmed) || nextTrimmed.match(sectionHeaderRegex)) {
+          if (/^\d+[\s).:-]+\s*(.*)$/.test(nextTrimmed) || nextTrimmed.match(sectionHeaderRegex)) {
             break;
           }
           
-          const isMcChoice = nextTrimmed.match(/^(\*?)([a-zA-Z])[\s).:-]+\s*(.*)$/);
+          const isMcChoice = nextTrimmed.match(/^(\*?)([a-zA-Z]|i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i);
           const isMaChoice = nextTrimmed.startsWith('[*]') || nextTrimmed.startsWith('[ ]');
           
           if (isMcChoice || isMaChoice) {
@@ -344,10 +822,58 @@ export class QuestionParser {
       return [];
     }
 
-    const cleanedText = text.replace(/\r\n/g, '\n');
+    let cleanedText = text.replace(/\r\n/g, '\n');
 
     if (format === 'auto') {
       format = this.detectFormat(cleanedText);
+    }
+
+    if (format === 'auto' || format === 'markdown') {
+      // First, parse raw text to collect formatting warnings for the user editor
+      const rawParser = new QuestionParser();
+      rawParser.parseMarkdown(cleanedText);
+      // Keep only the raw-text warnings (formatting observations like ignored lines,
+      // dangling text, missing type defaults). These help the user understand what
+      // the parser saw in their original text.
+      const rawWarnings = rawParser.warnings;
+
+      // Clean the text under the hood for actual parsing/rendering
+      cleanedText = QuestionParser.cleanText(cleanedText);
+
+      // Parse the cleaned text - this produces accurate validation results
+      // because cleanText has already standardized inline choices, answer keys,
+      // bold markers, roman numerals, etc.
+      try {
+        const questions = this.parseMarkdown(cleanedText);
+        // Use errors from the cleaned-text parse (accurate validation)
+        // and merge in warnings from both passes (deduplicating by message+line)
+        const cleanedWarnings = this.warnings;
+        const seenWarnings = new Set();
+        const mergedWarnings = [];
+        for (const w of [...rawWarnings, ...cleanedWarnings]) {
+          // Skip raw warnings that are likely false positives corrected by cleanText
+          if (rawWarnings.includes(w)) {
+            if (w.message.includes("no specified type") || w.message.includes("dangling line")) {
+              continue;
+            }
+          }
+          const key = `${w.line}:${w.message}`;
+          if (!seenWarnings.has(key)) {
+            seenWarnings.add(key);
+            mergedWarnings.push(w);
+          }
+        }
+        this.warnings = mergedWarnings;
+        return questions;
+      } catch (err) {
+        // If the cleaned parse fails, fall back to raw warnings/errors
+        this.warnings = rawWarnings;
+        this.errors.push({
+          line: 0,
+          message: `Parsing failed critically: ${err.message}`
+        });
+        return [];
+      }
     }
 
     try {
@@ -562,14 +1088,14 @@ export class QuestionParser {
     // Regex patterns
     const quizTitleRegex = /^[Qq]uiz [Tt]itle:\s*(.*)$/;
     const quizDescRegex = /^[Qq]uiz description:\s*(.*)$/;
-    const questionRegex = /^\d+\.\s*(.*)$/;
+    const questionRegex = /^(\d+)[\s).:-]+\s*(.*)$/;
     const titleRegex = /^[Tt]itle:\s*(.*)$/;
     const pointsRegex = /^[Pp]oints:\s*(.*)$/;
     const sectionHeaderRegex = /^(section|part|chapter|unit)\s+\w+[\s-:]*/i;
     
     // Choice Regexes
-    const mctfCorrectRegex = /^\*([a-zA-Z])\)\s*(.*)$/;
-    const mctfIncorrectRegex = /^([a-zA-Z])\)\s*(.*)$/;
+    const mctfCorrectRegex = /^\*(i{1,3}|iv|v|vi{1,3}|ix|x|[a-zA-Z])[\s).:-]+\s*(.*)$/i;
+    const mctfIncorrectRegex = /^(i{1,3}|iv|v|vi{1,3}|ix|x|[a-zA-Z])[\s).:-]+\s*(.*)$/i;
     const multansCorrectRegex = /^\[\*\]\s*(.*)$/;
     const multansIncorrectRegex = /^\[\s*\]\s*(.*)$/;
     const shortansCorrectRegex = /^\*\s*(.*)$/;
@@ -600,35 +1126,44 @@ export class QuestionParser {
         continue;
       }
 
+      // Check if the entire line is bolded (e.g. **choice**)
+      let checkLine = line;
+      let isBoldChoice = false;
+      const entireBoldRegex = /^\*\*\s*(.*?)\s*\*\*$/;
+      if (entireBoldRegex.test(line)) {
+        checkLine = line.replace(entireBoldRegex, '$1').trim();
+        isBoldChoice = true;
+      }
+
       // Check quiz-wide headers
       let match;
-      if (match = line.match(quizTitleRegex)) {
+      if (match = checkLine.match(quizTitleRegex)) {
         quizTitle = match[1].trim();
         continue;
       }
-      if (match = line.match(quizDescRegex)) {
+      if (match = checkLine.match(quizDescRegex)) {
         quizDescription = match[1].trim();
         continue;
       }
-      if (match = line.match(shuffleRegex)) {
+      if (match = checkLine.match(shuffleRegex)) {
         settings.shuffle_answers = this.cleanBoolString(match[1]);
         continue;
       }
-      if (match = line.match(showCorrectRegex)) {
+      if (match = checkLine.match(showCorrectRegex)) {
         settings.show_correct_answers = this.cleanBoolString(match[1]);
         continue;
       }
-      if (match = line.match(oneQuestionRegex)) {
+      if (match = checkLine.match(oneQuestionRegex)) {
         settings.one_question_at_a_time = this.cleanBoolString(match[1]);
         continue;
       }
-      if (match = line.match(cantGoBackRegex)) {
+      if (match = checkLine.match(cantGoBackRegex)) {
         settings.cant_go_back = this.cleanBoolString(match[1]);
         continue;
       }
 
       // Check section headers (resets context and finishes current question)
-      if (match = line.match(sectionHeaderRegex)) {
+      if (match = checkLine.match(sectionHeaderRegex)) {
         if (currentQuestion) {
           this.finalizeQuestion(currentQuestion, currentQuestion.startLine);
           questions.push(currentQuestion);
@@ -638,28 +1173,30 @@ export class QuestionParser {
       }
 
       // Question metadata
-      if (match = line.match(titleRegex)) {
+      if (match = checkLine.match(titleRegex)) {
         nextTitle = match[1].trim();
         continue;
       }
-      if (match = line.match(pointsRegex)) {
+      if (match = checkLine.match(pointsRegex)) {
         const p = parseFloat(match[1].trim());
         nextPoints = isNaN(p) ? 1 : p;
         continue;
       }
 
       // Start of a question
-      if (match = line.match(questionRegex)) {
+      if (match = checkLine.match(questionRegex)) {
         // Finalize previous question if any
         if (currentQuestion) {
           this.finalizeQuestion(currentQuestion, currentQuestion.startLine);
           questions.push(currentQuestion);
         }
 
+        const qText = isBoldChoice ? `**${match[2].trim()}**` : match[2].trim();
+
         currentQuestion = {
           id: `q_${Math.random().toString(36).substr(2, 9)}`,
           title: nextTitle || 'Question',
-          text: match[1].trim(),
+          text: qText,
           type: null, // to be determined by options
           points: nextPoints !== null ? nextPoints : 1,
           choices: [],
@@ -695,18 +1232,22 @@ export class QuestionParser {
       }
 
       // Check numerical response (= value)
-      if (match = line.match(numericalRegex)) {
+      if (match = checkLine.match(numericalRegex)) {
         currentQuestion.type = 'numerical_question';
         this.parseNumericalConstraint(currentQuestion, match[1].trim(), lineNum);
         continue;
       }
 
       // Check multiple choice / true-false correct choice (*a) choice text)
-      if (match = line.match(mctfCorrectRegex)) {
+      if (match = checkLine.match(mctfCorrectRegex)) {
         currentQuestion.type = currentQuestion.type || 'multiple_choice_question';
+        let choiceText = match[2].trim();
+        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
+        }
         currentQuestion.choices.push({
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
-          text: match[2].trim(),
+          text: choiceText,
           correct: true,
           feedback: null,
           syntax: 'mc'
@@ -716,12 +1257,26 @@ export class QuestionParser {
       }
 
       // Check multiple choice / true-false incorrect choice (a) choice text)
-      if (match = line.match(mctfIncorrectRegex)) {
+      if (match = checkLine.match(mctfIncorrectRegex)) {
         currentQuestion.type = currentQuestion.type || 'multiple_choice_question';
+        let choiceText = match[2].trim();
+        let isCorrect = isBoldChoice;
+        
+        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
+          isCorrect = true;
+        }
+        
+        let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
+        if (suffixCorrectMatch) {
+          choiceText = suffixCorrectMatch[1].trim();
+          isCorrect = true;
+        }
+
         currentQuestion.choices.push({
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
-          text: match[2].trim(),
-          correct: false,
+          text: choiceText,
+          correct: isCorrect,
           feedback: null,
           syntax: 'mc'
         });
@@ -730,11 +1285,15 @@ export class QuestionParser {
       }
 
       // Check multiple answer correct choice ([*] choice text)
-      if (match = line.match(multansCorrectRegex)) {
+      if (match = checkLine.match(multansCorrectRegex)) {
         currentQuestion.type = 'multiple_answers_question';
+        let choiceText = match[1].trim();
+        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
+        }
         currentQuestion.choices.push({
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
-          text: match[1].trim(),
+          text: choiceText,
           correct: true,
           feedback: null,
           syntax: 'ma'
@@ -744,12 +1303,18 @@ export class QuestionParser {
       }
 
       // Check multiple answer incorrect choice ([ ] choice text)
-      if (match = line.match(multansIncorrectRegex)) {
+      if (match = checkLine.match(multansIncorrectRegex)) {
         currentQuestion.type = 'multiple_answers_question';
+        let choiceText = match[1].trim();
+        let isCorrect = isBoldChoice;
+        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
+          isCorrect = true;
+        }
         currentQuestion.choices.push({
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
-          text: match[1].trim(),
-          correct: false,
+          text: choiceText,
+          correct: isCorrect,
           feedback: null,
           syntax: 'ma'
         });
@@ -758,11 +1323,15 @@ export class QuestionParser {
       }
 
       // Check short answer / fill in blank response (* acceptable answer)
-      if (match = line.match(shortansCorrectRegex)) {
+      if (match = checkLine.match(shortansCorrectRegex)) {
         currentQuestion.type = 'short_answer_question';
+        let choiceText = match[1].trim();
+        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
+        }
         currentQuestion.choices.push({
           id: `c_${Math.random().toString(36).substr(2, 9)}`,
-          text: match[1].trim(),
+          text: choiceText,
           correct: true,
           feedback: null,
           syntax: 'sa'
@@ -771,20 +1340,79 @@ export class QuestionParser {
         continue;
       }
 
+      // Check matching pair (> Left -> Right)
+      if (checkLine.startsWith('>')) {
+        currentQuestion.type = 'matching_question';
+        currentQuestion.choices = currentQuestion.choices || [];
+        
+        const rawContent = checkLine.substring(1).trim();
+        let left = '';
+        let right = '';
+        
+        const splitIdx = rawContent.indexOf('->');
+        const eqIdx = rawContent.indexOf('=');
+        
+        if (splitIdx !== -1) {
+          left = rawContent.substring(0, splitIdx).trim();
+          right = rawContent.substring(splitIdx + 2).trim();
+        } else if (eqIdx !== -1) {
+          left = rawContent.substring(0, eqIdx).trim();
+          right = rawContent.substring(eqIdx + 1).trim();
+        } else {
+          left = '';
+          right = rawContent;
+        }
+
+        if (left.startsWith('**') && left.endsWith('**')) {
+          left = left.substring(2, left.length - 2).trim();
+        }
+        if (right.startsWith('**') && right.endsWith('**')) {
+          right = right.substring(2, right.length - 2).trim();
+        }
+        
+        currentQuestion.choices.push({
+          id: `c_${Math.random().toString(36).substr(2, 9)}`,
+          left: left,
+          right: right,
+          correct: true,
+          syntax: 'mat'
+        });
+        canAppendToLastChoice = true;
+        continue;
+      }
+
+      // Check ordering step (~ Step text)
+      if (checkLine.startsWith('~')) {
+        currentQuestion.type = 'matching_question';
+        currentQuestion.choices = currentQuestion.choices || [];
+        let stepText = checkLine.substring(1).trim();
+        if (stepText.startsWith('**') && stepText.endsWith('**')) {
+          stepText = stepText.substring(2, stepText.length - 2).trim();
+        }
+        currentQuestion.choices.push({
+          id: `c_${Math.random().toString(36).substr(2, 9)}`,
+          text: stepText,
+          correct: true,
+          syntax: 'ord'
+        });
+        canAppendToLastChoice = true;
+        continue;
+      }
+
       // Check correct feedback (+)
-      if (match = line.match(correctFeedbackRegex)) {
+      if (match = checkLine.match(correctFeedbackRegex)) {
         currentQuestion.correctFeedback = match[1].trim();
         continue;
       }
 
       // Check incorrect feedback (-)
-      if (match = line.match(incorrectFeedbackRegex)) {
+      if (match = checkLine.match(incorrectFeedbackRegex)) {
         currentQuestion.incorrectFeedback = match[1].trim();
         continue;
       }
 
       // Check general feedback (...)
-      if (match = line.match(feedbackRegex)) {
+      if (match = checkLine.match(feedbackRegex)) {
         const fbText = match[1].trim();
         if (currentQuestion.choices.length > 0 && currentQuestion.type !== 'short_answer_question') {
           // Attach feedback to the last choice
@@ -901,15 +1529,84 @@ export class QuestionParser {
    */
   finalizeQuestion(q, lineNum) {
     if (!q.type) {
-      // Default to Multiple Choice if choices exist, else Essay
-      if (q.choices.length > 0) {
+      const cleanPrompt = q.text.trim().toLowerCase();
+      if (cleanPrompt.startsWith('essay:') || cleanPrompt.startsWith('essay -') || cleanPrompt === 'essay') {
+        q.type = 'essay_question';
+      } else if (cleanPrompt.startsWith('short answer:') || cleanPrompt.startsWith('short answer -') || cleanPrompt.startsWith('fill in the blank:') || cleanPrompt.startsWith('fill in the blank -')) {
+        q.type = 'short_answer_question';
+      } else if (cleanPrompt.startsWith('numeric answer:') || cleanPrompt.startsWith('numerical answer:') || cleanPrompt.startsWith('numeric:') || cleanPrompt.startsWith('numerical:')) {
+        q.type = 'numerical_question';
+      } else if (cleanPrompt.startsWith('matching:') || cleanPrompt.startsWith('match:')) {
+        q.type = 'matching_question';
+      } else if (cleanPrompt.startsWith('true/false:') || cleanPrompt.startsWith('t/f:') || cleanPrompt.startsWith('true or false:')) {
+        q.type = 'true_false_question';
+      } else if (cleanPrompt.startsWith('multiple choice:') || cleanPrompt.startsWith('mc:')) {
         q.type = 'multiple_choice_question';
+      } else if (cleanPrompt.startsWith('multiple response:') || cleanPrompt.startsWith('multiple answers:') || cleanPrompt.startsWith('select all:') || cleanPrompt.startsWith('select all that apply:')) {
+        q.type = 'multiple_answers_question';
+      } else if (q.choices.length > 0) {
+        const hasMat = q.choices.some(c => c.syntax === 'mat');
+        const hasOrd = q.choices.some(c => c.syntax === 'ord');
+        if (hasMat || hasOrd) {
+          q.type = 'matching_question';
+        } else {
+          q.type = 'multiple_choice_question';
+        }
       } else {
         q.type = 'essay_question';
         this.warnings.push({
           line: lineNum,
           message: `Question has no specified type or answer choices. Defaulting to Essay question.`
         });
+      }
+    }
+
+    if (q.type === 'matching_question') {
+      const isOrd = q.choices.some(c => c.syntax === 'ord');
+      q.matches = q.matches || [];
+      q.distractors = q.distractors || [];
+      
+      if (isOrd) {
+        q.isOrdering = true;
+        q.choices.forEach((c, idx) => {
+          if (c.syntax === 'ord') {
+            q.matches.push({
+              left: c.text,
+              right: (q.matches.length + 1).toString()
+            });
+          }
+        });
+      } else {
+        q.choices.forEach(c => {
+          if (c.syntax === 'mat') {
+            if (c.left === '' || c.left === '_' || c.left.toLowerCase() === '[distractor]') {
+              q.distractors.push(c.right);
+            } else {
+              q.matches.push({
+                left: c.left,
+                right: c.right
+              });
+            }
+          }
+        });
+      }
+      
+      q.choices = [];
+      
+      if (q.matches.length === 0) {
+        this.errors.push({
+          line: lineNum,
+          message: `Matching question "${q.text.substring(0, 30)}..." must have at least one valid match pair (> Left -> Right) or step (~ Step).`
+        });
+      } else {
+        const lefts = q.matches.map(m => m.left);
+        const duplicates = lefts.filter((item, index) => lefts.indexOf(item) !== index);
+        if (duplicates.length > 0) {
+          this.warnings.push({
+            line: lineNum,
+            message: `Matching question "${q.text.substring(0, 30)}..." has duplicate left stems: "${duplicates.join(', ')}". Each stem should be unique.`
+          });
+        }
       }
     }
 
@@ -1037,6 +1734,7 @@ export class QuestionParser {
       // Extract type (map common synonyms to Canvas QTI question types)
       let rawType = (idxType !== -1 ? row[idxType] : '').toLowerCase().trim();
       let type = 'multiple_choice_question';
+      let isOrdering = false;
       if (rawType.includes('multiple choice') || rawType === 'mc') type = 'multiple_choice_question';
       else if (rawType.includes('true') || rawType === 'tf') type = 'true_false_question';
       else if (rawType.includes('multiple answer') || rawType.includes('checkbox') || rawType === 'ma') type = 'multiple_answers_question';
@@ -1044,6 +1742,11 @@ export class QuestionParser {
       else if (rawType.includes('essay')) type = 'essay_question';
       else if (rawType.includes('upload') || rawType.includes('file')) type = 'file_upload_question';
       else if (rawType.includes('numerical') || rawType === 'num') type = 'numerical_question';
+      else if (rawType.includes('matching') || rawType === 'match' || rawType === 'mt') type = 'matching_question';
+      else if (rawType.includes('ordering') || rawType === 'order' || rawType === 'ord') {
+        type = 'matching_question';
+        isOrdering = true;
+      }
       else if (choiceIndices.length > 0) {
         // If there are choice columns, assume Multiple Choice by default
         type = 'multiple_choice_question';
@@ -1063,7 +1766,7 @@ export class QuestionParser {
       const rawCorrect = (idxCorrect !== -1 ? row[idxCorrect] : '').trim();
       const feedback = idxFeedback !== -1 ? row[idxFeedback] : '';
 
-      const questionObj = {
+       const questionObj = {
         id: `q_${Math.random().toString(36).substr(2, 9)}`,
         title: 'Question',
         text: qText,
@@ -1072,7 +1775,8 @@ export class QuestionParser {
         choices: [],
         feedback: feedback || null,
         correctFeedback: null,
-        incorrectFeedback: null
+        incorrectFeedback: null,
+        isOrdering: isOrdering
       };
 
       // Handle choices extraction
@@ -1133,6 +1837,47 @@ export class QuestionParser {
         if (questionObj.choices.length === 0) {
           this.errors.push({ line: lineNum, message: `Row ${lineNum}: Question is set as ${type} but has no choices.` });
         }
+      } else if (type === 'matching_question') {
+        const matches = [];
+        const distractors = [];
+        
+        choiceIndices.forEach(({ index }) => {
+          const val = row[index];
+          if (val && val.trim()) {
+            const raw = val.trim();
+            if (questionObj.isOrdering) {
+              matches.push({
+                left: raw,
+                right: (matches.length + 1).toString()
+              });
+            } else {
+              const splitIdx = raw.indexOf('->');
+              const eqIdx = raw.indexOf('=');
+              let left = '';
+              let right = '';
+              
+              if (splitIdx !== -1) {
+                left = raw.substring(0, splitIdx).trim();
+                right = raw.substring(splitIdx + 2).trim();
+              } else if (eqIdx !== -1) {
+                left = raw.substring(0, eqIdx).trim();
+                right = raw.substring(eqIdx + 1).trim();
+              } else {
+                left = '';
+                right = raw;
+              }
+              
+              if (left === '' || left === '_' || left.toLowerCase() === '[distractor]') {
+                distractors.push(right);
+              } else {
+                matches.push({ left, right });
+              }
+            }
+          }
+        });
+        
+        questionObj.matches = matches;
+        questionObj.distractors = distractors;
       } else if (type === 'short_answer_question') {
         const answersList = [];
         if (rawCorrect) {
