@@ -179,7 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const contentSpreadsheet = document.getElementById('content-spreadsheet');
   
   const btnDownload = document.getElementById('btn-download');
-  const btnDemo = document.getElementById('btn-load-demo');
+
   const btnHelp = document.getElementById('btn-show-help');
   const btnAutoClean = document.getElementById('btn-auto-clean');
   const modalHelp = document.getElementById('modal-help');
@@ -374,20 +374,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Load Demo Content
-  btnDemo.addEventListener('click', () => {
-    state.approvedWarnings.clear();
-    if (contentMarkdown.classList.contains('active')) {
-      textEditor.value = demoMarkdown;
-      updateCharCount();
-      triggerParse();
-      showToast("Demo markdown loaded successfully!", "success");
-    } else {
-      loadDemoToGrid();
-      triggerParse();
-      showToast("Demo spreadsheet data loaded successfully!", "success");
-    }
-  });
+
 
   // Grid Controls
   btnAddRow.addEventListener('click', () => {
