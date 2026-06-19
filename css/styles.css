@@ -11,6 +11,10 @@
   --primary-hover: #1557b0;
   --primary-glow: rgba(26, 115, 232, 0.3);
   
+  --secondary-color: #d22630;
+  --secondary-hover: #b81e26;
+  --secondary-glow: rgba(210, 38, 48, 0.3);
+  
   --bg-main: #0b0f19;
   --bg-card: rgba(17, 24, 39, 0.75);
   --bg-card-hover: rgba(22, 32, 53, 0.85);
@@ -91,7 +95,7 @@ body {
   right: -10%;
   width: 700px;
   height: 700px;
-  background: radial-gradient(circle, rgba(16, 185, 129, 0.05) 0%, rgba(11, 15, 25, 0) 70%);
+  background: radial-gradient(circle, rgba(210, 38, 48, 0.08) 0%, rgba(11, 15, 25, 0) 70%);
   z-index: -1;
   pointer-events: none;
 }
@@ -119,7 +123,7 @@ header {
 .brand-logo {
   width: 40px;
   height: 40px;
-  background-color: var(--primary-color);
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
@@ -127,7 +131,7 @@ header {
   color: white;
   font-weight: 800;
   font-size: 1.25rem;
-  box-shadow: 0 0 20px var(--primary-glow);
+  box-shadow: 0 0 20px rgba(26, 115, 232, 0.2), 0 0 10px rgba(210, 38, 48, 0.2);
 }
 
 .brand-title h1 {
@@ -989,4 +993,60 @@ footer {
   transform: scale(1.15);
   transition: transform var(--transition-fast);
 }
+
+/* TSTC Red custom button styling */
+.btn-tstc-red {
+  border: 1px solid var(--secondary-color);
+  color: var(--secondary-color);
+  background: rgba(210, 38, 48, 0.05);
+  transition: var(--transition-fast);
+}
+.btn-tstc-red:hover {
+  background: rgba(210, 38, 48, 0.15);
+  color: white;
+  border-color: var(--secondary-hover);
+  box-shadow: 0 0 10px rgba(210, 38, 48, 0.2);
+}
+
+/* Download button brand styling */
+#btn-download {
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+  border: none;
+  box-shadow: 0 4px 15px rgba(26, 115, 232, 0.2), 0 4px 15px rgba(210, 38, 48, 0.2);
+  transition: all var(--transition-fast);
+}
+#btn-download:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(26, 115, 232, 0.3), 0 6px 20px rgba(210, 38, 48, 0.3);
+}
+#btn-download:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Right-panel section headers styling */
+.section-header {
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.5rem;
+}
+
+.section-header span {
+  font-size: 0.95rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.section-header .preview-stats {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
 

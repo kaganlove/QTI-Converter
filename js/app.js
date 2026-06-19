@@ -912,8 +912,14 @@ document.addEventListener('DOMContentLoaded', () => {
       return !state.approvedWarnings.has(key);
     });
 
+    const errorsHeader = document.getElementById('errors-header');
     if (errors.length === 0 && activeWarnings.length === 0) {
+      if (errorsHeader) errorsHeader.style.display = 'none';
       return;
+    }
+
+    if (errorsHeader) {
+      errorsHeader.style.display = 'flex';
     }
 
     errors.forEach(err => {
