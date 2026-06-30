@@ -224,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   fileInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
-      handleFileUpload(e.target.files[0]);
+      handleMultipleFiles(e.target.files);
     }
   });
 
@@ -241,7 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     uploadZone.classList.remove('dragover');
     if (e.dataTransfer.files.length > 0) {
-      handleFileUpload(e.dataTransfer.files[0]);
+      handleMultipleFiles(e.dataTransfer.files);
     }
   });
 
@@ -1035,126 +1035,162 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 4000);
   }
 
-  // File Processing Helpers
-  function handleFileUpload(file) {
-    state.approvedWarnings.clear();
+  function readAsTextPromise(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = (e) => reject(new Error("File reading failed"));
+      reader.readAsText(file);
+    });
+  }
+
+  function readAsArrayBufferPromise(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = (e) => reject(new Error("File reading failed"));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function getGridRowCount() {
+    return state.spreadsheetRows.filter(row => row.some(cell => cell.trim() !== '')).length;
+  }
+
+  async function processTextFile(file, append = false) {
     const ext = file.name.split('.').pop().toLowerCase();
-    
-    uploadFileName.innerText = file.name;
-    uploadZoneContent.style.display = 'none';
-    uploadFileInfo.style.display = 'flex';
-
-    showToast(`Processing file: ${file.name}...`, "info");
-
-    const reader = new FileReader();
-
-    if (ext === 'txt' || ext === 'csv' || ext === 'tsv') {
-      reader.onload = (e) => {
-        const text = e.target.result;
+    try {
+      if (ext === 'txt' || ext === 'csv' || ext === 'tsv') {
+        const text = await readAsTextPromise(file);
         if (ext === 'csv' || ext === 'tsv') {
           switchToSpreadsheetTab();
-          populateGridFromText(text, ext === 'csv' ? ',' : '\t');
+          populateGridFromText(text, ext === 'csv' ? ',' : '\t', append);
         } else {
-          switchToMarkdownTab();
           const cleaned = QuestionParser.cleanText(text);
-          textEditor.value = cleaned;
+          switchToMarkdownTab();
+          if (append && textEditor.value.trim() !== '') {
+            textEditor.value += '\n\n' + cleaned;
+          } else {
+            textEditor.value = cleaned;
+          }
           updateCharCount();
           triggerParse();
         }
-      };
-      reader.readAsText(file);
-    } else if (ext === 'docx') {
-      reader.onload = (e) => {
-        const arrayBuffer = e.target.result;
+      } else if (ext === 'docx') {
+        const arrayBuffer = await readAsArrayBufferPromise(file);
         if (!window.mammoth) {
           showToast("Mammoth.js library is not loaded.", "error");
-          resetUploadUI();
           return;
         }
-        window.mammoth.convertToHtml({ arrayBuffer: arrayBuffer })
-          .then((result) => {
-            const markdown = htmlToMarkdown(result.value);
-            const cleaned = QuestionParser.cleanText(markdown);
-            switchToMarkdownTab();
-            textEditor.value = cleaned;
-            updateCharCount();
-            triggerParse();
-            showToast("Word document text and formatting loaded successfully!", "success");
-          })
-          .catch((err) => {
-            showToast(`Word parsing failed: ${err.message}`, "error");
-            resetUploadUI();
-          });
-      };
-      reader.readAsArrayBuffer(file);
-    } else if (ext === 'pdf') {
-      reader.onload = async (e) => {
-        const arrayBuffer = e.target.result;
+        const result = await window.mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+        const markdown = htmlToMarkdown(result.value);
+        const cleaned = QuestionParser.cleanText(markdown);
+        switchToMarkdownTab();
+        if (append && textEditor.value.trim() !== '') {
+          textEditor.value += '\n\n' + cleaned;
+        } else {
+          textEditor.value = cleaned;
+        }
+        updateCharCount();
+        triggerParse();
+      } else if (ext === 'pdf') {
+        const arrayBuffer = await readAsArrayBufferPromise(file);
         if (!window.pdfjsLib) {
           showToast("PDF.js library is not loaded.", "error");
-          resetUploadUI();
           return;
         }
-        try {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
-          const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
-          const pdf = await loadingTask.promise;
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+        const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdf = await loadingTask.promise;
+        
+        let fullText = '';
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+          const page = await pdf.getPage(pageNum);
+          const textContent = await page.getTextContent();
           
-          let fullText = '';
-          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-            const page = await pdf.getPage(pageNum);
-            const textContent = await page.getTextContent();
-            
-            let lastY = -1;
-            let pageText = '';
-            for (let item of textContent.items) {
-              if (lastY !== -1 && Math.abs(item.transform[5] - lastY) > 5) {
-                pageText += '\n';
-              }
-              pageText += item.str + ' ';
-              lastY = item.transform[5];
+          let lastY = -1;
+          let pageText = '';
+          for (let item of textContent.items) {
+            if (lastY !== -1 && Math.abs(item.transform[5] - lastY) > 5) {
+              pageText += '\n';
             }
-            fullText += pageText + '\n';
+            pageText += item.str + ' ';
+            lastY = item.transform[5];
           }
-          
-          switchToMarkdownTab();
-          textEditor.value = fullText.trim();
-          updateCharCount();
-          triggerParse();
-          showToast("PDF text extracted successfully!", "success");
-        } catch (err) {
-          showToast(`PDF parsing failed: ${err.message}`, "error");
-          resetUploadUI();
+          fullText += pageText + '\n';
         }
-      };
-      reader.readAsArrayBuffer(file);
-    } else if (ext === 'xlsx' || ext === 'xls') {
-      reader.onload = (e) => {
-        const arrayBuffer = e.target.result;
+        switchToMarkdownTab();
+        const cleaned = QuestionParser.cleanText(fullText);
+        if (append && textEditor.value.trim() !== '') {
+          textEditor.value += '\n\n' + cleaned;
+        } else {
+          textEditor.value = cleaned;
+        }
+        updateCharCount();
+        triggerParse();
+      }
+    } catch (err) {
+      showToast(`Parsing failed for ${file.name}: ${err.message}`, "error");
+    }
+  }
+
+  async function processSheetFile(file, append = false) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    try {
+      if (ext === 'xlsx' || ext === 'xls') {
+        const arrayBuffer = await readAsArrayBufferPromise(file);
         if (!window.XLSX) {
           showToast("SheetJS library is not loaded.", "error");
-          resetUploadUI();
           return;
         }
-        try {
-          const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          const tsvText = window.XLSX.utils.sheet_to_txt(worksheet);
+        const workbook = window.XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const tsvText = window.XLSX.utils.sheet_to_txt(worksheet);
 
-          switchToSpreadsheetTab();
-          populateGridFromText(tsvText, '\t');
-          showToast("Excel spreadsheet mapped to grid successfully!", "success");
-        } catch (err) {
-          showToast(`Excel parsing failed: ${err.message}`, "error");
-          resetUploadUI();
-        }
-      };
-      reader.readAsArrayBuffer(file);
-    } else {
-      showToast(`Unsupported file type: .${ext}`, "error");
-      resetUploadUI();
+        switchToSpreadsheetTab();
+        populateGridFromText(tsvText, '\t', append);
+        showToast(`Spreadsheet ${file.name} mapped successfully!`, "success");
+      }
+    } catch (err) {
+      showToast(`Parsing failed for ${file.name}: ${err.message}`, "error");
     }
+  }
+
+  async function handleMultipleFiles(files) {
+    state.approvedWarnings.clear();
+    showToast(`Processing ${files.length} file(s)...`, "info");
+    
+    let textFiles = [];
+    let sheetFiles = [];
+    
+    for (let file of files) {
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (['xlsx', 'xls', 'csv', 'tsv'].includes(ext)) {
+        sheetFiles.push(file);
+      } else {
+        textFiles.push(file);
+      }
+    }
+
+    // Process text files sequentially
+    for (let i = 0; i < textFiles.length; i++) {
+      const file = textFiles[i];
+      const isFirst = (i === 0 && textEditor.value.trim() === '');
+      await processTextFile(file, !isFirst);
+    }
+
+    // Process sheet files sequentially
+    for (let i = 0; i < sheetFiles.length; i++) {
+      const file = sheetFiles[i];
+      const isFirst = (i === 0 && textFiles.length === 0 && getGridRowCount() === 0);
+      await processSheetFile(file, !isFirst);
+    }
+
+    const fileNames = Array.from(files).map(f => f.name).join(', ');
+    uploadFileName.innerText = fileNames;
+    uploadZoneContent.style.display = 'none';
+    uploadFileInfo.style.display = 'flex';
   }
 
   function resetUploadUI() {
@@ -1181,11 +1217,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Populate interactive grid from raw CSV or TSV text
-  function populateGridFromText(text, separator) {
+  function populateGridFromText(text, separator, append = false) {
     const lines = text.split('\n');
     if (lines.length === 0) return;
 
-    initializeGrid(0);
+    if (!append) {
+      initializeGrid(0);
+    }
 
     let startIdx = 0;
     const firstLine = lines[0].toLowerCase();
