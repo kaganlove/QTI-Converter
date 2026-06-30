@@ -1,5 +1,5 @@
-import { QuestionParser } from './parser.js?v=1.0.3';
-import { QTIGenerator } from './qti-generator.js?v=1.0.3';
+import { QuestionParser } from './parser.js?v=1.0.4';
+import { QTIGenerator } from './qti-generator.js?v=1.0.4';
 
 function escapeHtml(unsafe) {
   if (unsafe === undefined || unsafe === null) return '';
@@ -1095,7 +1095,9 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         const result = await window.mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+        console.log("MAMMOTH HTML:", result.value);
         const markdown = htmlToMarkdown(result.value);
+        console.log("HTML TO MARKDOWN:", markdown);
         const cleaned = QuestionParser.cleanText(markdown);
         switchToMarkdownTab();
         if (append && textEditor.value.trim() !== '') {
