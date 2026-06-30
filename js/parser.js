@@ -96,13 +96,33 @@ export class QuestionParser {
   static cleanText(text) {
     if (!text || !text.trim()) return '';
     
-    // Normalize newlines
     let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     let lines = normalized.split('\n');
 
+    // Split lines containing embedded uppercase choice prefixes (like "Question? A. Choice")
+    let splitLines = [];
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i];
+      let currentLine = line;
+      let keepSplitting = true;
+      while (keepSplitting) {
+        const embedMatch = currentLine.match(/^([\s\S]*?)\s+([A-Z])[).:-]\s+([\s\S]*)$/);
+        if (embedMatch && !/^(?:question|q)\s*\d+/i.test(embedMatch[1].trim())) {
+          const part1 = embedMatch[1].trim();
+          const part2 = `${embedMatch[2]}. ${embedMatch[3].trim()}`;
+          splitLines.push(part1);
+          currentLine = part2;
+        } else {
+          splitLines.push(currentLine);
+          keepSplitting = false;
+        }
+      }
+    }
+    lines = splitLines;
+
     // Preprocess: standardize question headers (e.g. "Question 3" or "**Question 3**" on a line by itself)
-    const initChoiceRegex = /^([a-zA-Z])[\s).:-]+\s*(.*)$/;
-    const initRomanChoiceRegex = /^(\*?)(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i;
+    const initChoiceRegex = /^([a-zA-Z])(?:[).:-]|\s{2,})\s*(.*)$/;
+    const initRomanChoiceRegex = /^(\*?)(i{1,3}|iv|v|vi{1,3}|ix|x)(?:[).:-]|\s{2,})\s*(.*)$/i;
     for (let idx = 0; idx < lines.length; idx++) {
       const line = lines[idx].trim();
       const cleanLine = line.replace(/\*\*/g, '').trim();
@@ -265,8 +285,8 @@ export class QuestionParser {
     let choiceCount = 0;
 
     const questionStartRegex = /^(\d+)[\s).:-]+\s*(.*)$/;
-    const choiceRegex = /^([a-zA-Z])[\s).:-]+\s*(.*)$/;
-    const romanChoiceRegex = /^(\*?)(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i;
+    const choiceRegex = /^([a-zA-Z])(?:[).:-]|\s{2,})\s*(.*)$/;
+    const romanChoiceRegex = /^(\*?)(i{1,3}|iv|v|vi{1,3}|ix|x)(?:[).:-]|\s{2,})\s*(.*)$/i;
     const sectionHeaderRegex = /^(section|part|chapter|unit)\s+\w+[\s-:]*/i;
 
     // Buffers for state machine parsing
@@ -281,40 +301,51 @@ export class QuestionParser {
       output.push(bufferedQuestionLine);
 
       // 2. Determine if there is a correct answer matched by the correct answer line
-      let correctIndex = -1;
+      let correctIndices = new Set();
       if (currentCorrectLetter) {
-        const target = currentCorrectLetter.trim().toLowerCase();
-        
-        // Try matching by standardized letter index (e.g., 'a' -> 0, 'b' -> 1)
-        if (target.length === 1 && target >= 'a' && target <= 'z') {
-          const targetCode = target.charCodeAt(0) - 97;
-          if (targetCode >= 0 && targetCode < bufferedChoices.length) {
-            correctIndex = targetCode;
+        // Support splitting multiple comma-separated or space-separated letters/numbers/text
+        const targets = currentCorrectLetter.split(/[,;\s&]|\band\b/i)
+          .map(t => t.trim().toLowerCase())
+          .filter(t => t.length > 0);
+          
+        targets.forEach(target => {
+          let matchedIdx = -1;
+          
+          // Try matching by standardized letter index (e.g., 'a' -> 0, 'b' -> 1)
+          if (target.length === 1 && target >= 'a' && target <= 'z') {
+            const targetCode = target.charCodeAt(0) - 97;
+            if (targetCode >= 0 && targetCode < bufferedChoices.length) {
+              matchedIdx = targetCode;
+            }
           }
-        }
 
-        // Try matching by original letter prefix (case-insensitive)
-        if (correctIndex === -1) {
-          correctIndex = bufferedChoices.findIndex(c => c.originalLetter && c.originalLetter.toLowerCase() === target);
-        }
-
-        // Try matching by 1-based index if target is a number
-        if (correctIndex === -1 && /^\d+$/.test(target)) {
-          const numIdx = parseInt(target, 10) - 1;
-          if (numIdx >= 0 && numIdx < bufferedChoices.length) {
-            correctIndex = numIdx;
+          // Try matching by original letter prefix (case-insensitive)
+          if (matchedIdx === -1) {
+            matchedIdx = bufferedChoices.findIndex(c => c.originalLetter && c.originalLetter.toLowerCase() === target);
           }
-        }
 
-        // Try matching by exact choice text (case-insensitive, trimmed)
-        if (correctIndex === -1) {
-          correctIndex = bufferedChoices.findIndex(c => c.text.toLowerCase() === target || c.text.toLowerCase().replace(/\*\*/g, '') === target);
-        }
+          // Try matching by 1-based index if target is a number
+          if (matchedIdx === -1 && /^\d+$/.test(target)) {
+            const numIdx = parseInt(target, 10) - 1;
+            if (numIdx >= 0 && numIdx < bufferedChoices.length) {
+              matchedIdx = numIdx;
+            }
+          }
+
+          // Try matching by exact choice text (case-insensitive, trimmed)
+          if (matchedIdx === -1) {
+            matchedIdx = bufferedChoices.findIndex(c => c.text.toLowerCase() === target || c.text.toLowerCase().replace(/\*\*/g, '') === target);
+          }
+          
+          if (matchedIdx !== -1) {
+            correctIndices.add(matchedIdx);
+          }
+        });
       }
 
       // 3. Push the standardized choices to output
       bufferedChoices.forEach((choice, idx) => {
-        const isCorrect = choice.isCorrect || (idx === correctIndex);
+        const isCorrect = choice.isCorrect || correctIndices.has(idx);
         
         if (choice.type === 'checkbox') {
           const prefix = isCorrect ? '[*]' : '[ ]';
@@ -647,7 +678,7 @@ export class QuestionParser {
 
       // Check separate-line correct answer declarations: * A, * B, Correct: A
       let cleanLine = checkTrimmed.replace(/\*\*/g, '').trim();
-      let correctMatch = cleanLine.match(/^(?:correct\s*answer|correct|answer)[\s:-]+\s*(.*)$/i) || 
+      let correctMatch = cleanLine.match(/^(?:correct\s*answers?|correct|answers?)[\s:-]+\s*(.*)$/i) || 
                          cleanLine.match(/^\*\s*([a-zA-Z0-9])\s*$/);
       if (correctMatch) {
         currentCorrectLetter = correctMatch[1].trim();
@@ -721,9 +752,9 @@ export class QuestionParser {
 
       if (!isChoice) {
         // Check roman numerals
-        let rMatch = matchLine.match(/^(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i);
+        let rMatch = matchLine.match(/^(i{1,3}|iv|v|vi{1,3}|ix|x)(?:[).:-]|\s{2,})\s*(.*)$/i);
         // Check letters
-        let cMatch = matchLine.match(/^([a-zA-Z])[\s).:-]+\s*(.*)$/);
+        let cMatch = matchLine.match(/^([a-zA-Z])(?:[).:-]|\s{2,})\s*(.*)$/);
 
         if (rMatch && !/^\d+/.test(matchLine)) {
           isChoice = true;

@@ -16,6 +16,12 @@ function htmlToMarkdown(html) {
   
   let docHtml = html;
   
+  // Move trailing <br /> tags outside of formatting tags to prevent Markdown formatting bleeding across lines
+  docHtml = docHtml.replace(/<strong([^>]*)>([\s\S]*?)<br\s*\/?>([\s\S]*?)<\/strong>/gi, '<strong>$2$3</strong><br />');
+  docHtml = docHtml.replace(/<b([^>]*)>([\s\S]*?)<br\s*\/?>([\s\S]*?)<\/b>/gi, '<b>$2$3</b><br />');
+  docHtml = docHtml.replace(/<em([^>]*)>([\s\S]*?)<br\s*\/?>([\s\S]*?)<\/em>/gi, '<em>$2$3</em><br />');
+  docHtml = docHtml.replace(/<i([^>]*)>([\s\S]*?)<br\s*\/?>([\s\S]*?)<\/i>/gi, '<i>$2$3</i><br />');
+  
   // Parse HTML to convert style-based bolding (e.g. font-weight: 700) to standard strong tags
   if (typeof DOMParser !== 'undefined') {
     try {
