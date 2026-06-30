@@ -98,6 +98,7 @@ const state = {
   },
   spreadsheetRows: [],
   approvedWarnings: new Set(), // Track approved/dismissed warnings
+  loadedFiles: [], // Track loaded filenames
   isNavigatingToLine: false // Track if the editor has just navigated to an error/warning line
 };
 
@@ -253,11 +254,12 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Clear editors
     textEditor.value = '';
+    state.loadedFiles = [];
     updateCharCount();
     state.approvedWarnings.clear();
     initializeGrid(5);
     triggerParse();
-    showToast("Uploaded file removed.", "info");
+    showToast("Uploaded files removed.", "info");
   });
 
   // Tab switching
@@ -1171,6 +1173,14 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         textFiles.push(file);
       }
+      
+      // Accumulate file names in state
+      if (!state.loadedFiles) {
+        state.loadedFiles = [];
+      }
+      if (!state.loadedFiles.includes(file.name)) {
+        state.loadedFiles.push(file.name);
+      }
     }
 
     // Process text files sequentially
@@ -1187,10 +1197,13 @@ document.addEventListener('DOMContentLoaded', () => {
       await processSheetFile(file, !isFirst);
     }
 
-    const fileNames = Array.from(files).map(f => f.name).join(', ');
+    const fileNames = state.loadedFiles.join(', ');
     uploadFileName.innerText = fileNames;
     uploadZoneContent.style.display = 'none';
     uploadFileInfo.style.display = 'flex';
+
+    // Clear input value so same files can be selected/uploaded again later
+    fileInput.value = '';
   }
 
   function resetUploadUI() {
