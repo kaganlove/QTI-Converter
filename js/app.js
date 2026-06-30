@@ -66,6 +66,10 @@ function htmlToMarkdown(html) {
   text = text.replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**');
   text = text.replace(/<b[^>]*>(.*?)<\/b>/gi, '**$1**');
   
+  // Convert italics tags to _
+  text = text.replace(/<em[^>]*>(.*?)<\/em>/gi, '_$1_');
+  text = text.replace(/<i[^>]*>(.*?)<\/i>/gi, '_$1_');
+  
   // Strip all other HTML tags
   text = text.replace(/<[^>]+>/g, '');
   

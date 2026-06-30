@@ -672,26 +672,45 @@ export class QuestionParser {
       let isChoice = false;
       let originalLetter = null;
       let choiceText = null;
-      let isCorrect = isBoldLine;
+      let isCorrect = false;
 
+      // Detect if the line contains bold or italic markers
+      let isBoldOrItalic = false;
+      if (trimmed.includes('**') || trimmed.includes('_') || isBoldLine) {
+        isBoldOrItalic = true;
+      }
+      // Check for single asterisk italics
+      if (trimmed.startsWith('*') && trimmed.endsWith('*') && trimmed.length > 2 && !trimmed.startsWith('**')) {
+        isBoldOrItalic = true;
+      } else {
+        const firstStar = trimmed.indexOf('*');
+        const lastStar = trimmed.lastIndexOf('*');
+        if (firstStar !== -1 && lastStar !== -1 && firstStar !== lastStar) {
+          isBoldOrItalic = true;
+        }
+      }
+
+      // Create a stripped version of the line for regex matching
+      // We strip bold (**), italics (_), and standard enclosing single asterisks
+      let matchLine = trimmed.replace(/\*\*/g, '').replace(/_/g, '').trim();
+      if (matchLine.startsWith('*') && matchLine.endsWith('*') && matchLine.length > 2) {
+        matchLine = matchLine.slice(1, -1).trim();
+      }
+
+      // Check for leading asterisk indicating correct answer
       let hasLeadingAsterisk = false;
-      let cLine = checkTrimmed;
-      if (cLine.startsWith('*') && !cLine.startsWith('**')) {
+      if (matchLine.startsWith('*') && !matchLine.startsWith('**')) {
         hasLeadingAsterisk = true;
-        cLine = cLine.substring(1).trim();
+        matchLine = matchLine.substring(1).trim();
       }
 
       // Check checkbox choices first
-      let cbMatch = cLine.match(/^(\[[xX\*\s]?\])\s*(.*)$/);
+      let cbMatch = matchLine.match(/^(\[[xX\*\s]?\])\s*(.*)$/);
       if (cbMatch) {
         isChoice = true;
         const cbPrefix = cbMatch[1];
         choiceText = cbMatch[2].trim();
-        isCorrect = cbPrefix.includes('*') || cbPrefix.toLowerCase().includes('x') || isBoldLine;
-        
-        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
-          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
-        }
+        isCorrect = cbPrefix.includes('*') || cbPrefix.toLowerCase().includes('x') || isBoldOrItalic;
         
         bufferedChoices.push({
           type: 'checkbox',
@@ -702,33 +721,23 @@ export class QuestionParser {
 
       if (!isChoice) {
         // Check roman numerals
-        let rMatch = cLine.match(/^(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i);
+        let rMatch = matchLine.match(/^(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i);
         // Check letters
-        let cMatch = cLine.match(/^([a-zA-Z])[\s).:-]+\s*(.*)$/);
+        let cMatch = matchLine.match(/^([a-zA-Z])[\s).:-]+\s*(.*)$/);
 
-        if (rMatch && !/^\d+/.test(cLine)) {
+        if (rMatch && !/^\d+/.test(matchLine)) {
           isChoice = true;
           originalLetter = rMatch[1];
           choiceText = rMatch[2].trim();
-          isCorrect = hasLeadingAsterisk || isBoldLine;
-        } else if (cMatch && !/^\d+/.test(cLine)) {
+          isCorrect = hasLeadingAsterisk || isBoldOrItalic;
+        } else if (cMatch && !/^\d+/.test(matchLine)) {
           isChoice = true;
           originalLetter = cMatch[1];
           choiceText = cMatch[2].trim();
-          isCorrect = hasLeadingAsterisk || isBoldLine;
+          isCorrect = hasLeadingAsterisk || isBoldOrItalic;
         }
 
         if (isChoice) {
-          if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
-            choiceText = choiceText.substring(2, choiceText.length - 2).trim();
-            isCorrect = true;
-          }
-          let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
-          if (suffixCorrectMatch) {
-            choiceText = suffixCorrectMatch[1].trim();
-            isCorrect = true;
-          }
-
           bufferedChoices.push({
             type: 'letter',
             originalLetter: originalLetter,
@@ -740,20 +749,11 @@ export class QuestionParser {
 
       // Check bullet choices (only if we don't have a correct answer letter matched yet, to avoid matching feedback lines as bullet choices)
       if (!isChoice && !currentCorrectLetter) {
-        let bMatch = checkTrimmed.match(/^([•\-–—])\s*(.*)$/);
+        let bMatch = matchLine.match(/^([•\-–—])\s*(.*)$/);
         if (bMatch) {
           isChoice = true;
           choiceText = bMatch[2].trim();
-          
-          if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
-            choiceText = choiceText.substring(2, choiceText.length - 2).trim();
-            isCorrect = true;
-          }
-          let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
-          if (suffixCorrectMatch) {
-            choiceText = suffixCorrectMatch[1].trim();
-            isCorrect = true;
-          }
+          isCorrect = isBoldOrItalic;
 
           bufferedChoices.push({
             type: 'bullet',
