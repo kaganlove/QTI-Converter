@@ -100,6 +100,35 @@ export class QuestionParser {
     let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     let lines = normalized.split('\n');
 
+    // Preprocess: standardize question headers (e.g. "Question 3" or "**Question 3**" on a line by itself)
+    const initChoiceRegex = /^([a-zA-Z])[\s).:-]+\s*(.*)$/;
+    const initRomanChoiceRegex = /^(\*?)(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i;
+    for (let idx = 0; idx < lines.length; idx++) {
+      const line = lines[idx].trim();
+      const cleanLine = line.replace(/\*\*/g, '').trim();
+      
+      const qHeaderMatch = cleanLine.match(/^(?:question|q)\s*(\d+)\s*$/i);
+      if (qHeaderMatch) {
+        const qNum = qHeaderMatch[1];
+        // Find next non-empty line
+        let promptIdx = idx + 1;
+        while (promptIdx < lines.length && lines[promptIdx].trim() === '') {
+          promptIdx++;
+        }
+        
+        if (promptIdx < lines.length) {
+          const prompt = lines[promptIdx].trim();
+          // Make sure the prompt is not a choice or another header
+          if (!prompt.match(initChoiceRegex) && !prompt.match(initRomanChoiceRegex) && !prompt.match(/^(?:correct|answer)/i)) {
+            // Replace the question header line with standardized "num. prompt"
+            lines[idx] = `${qNum}. ${prompt}`;
+            // Clear the original prompt line
+            lines[promptIdx] = '';
+          }
+        }
+      }
+    }
+
     // Detect table-embedded question blocks (Section L)
     for (let idx = 0; idx < lines.length; idx++) {
       const line = lines[idx].trim();
@@ -240,17 +269,96 @@ export class QuestionParser {
     const romanChoiceRegex = /^(\*?)(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i;
     const sectionHeaderRegex = /^(section|part|chapter|unit)\s+\w+[\s-:]*/i;
 
+    // Buffers for state machine parsing
+    let bufferedQuestionLine = null;
+    let bufferedChoices = [];
+    let bufferedFeedbacks = [];
+
+    function flushBufferedQuestion() {
+      if (!bufferedQuestionLine) return;
+
+      // 1. Push the question line
+      output.push(bufferedQuestionLine);
+
+      // 2. Determine if there is a correct answer matched by the correct answer line
+      let correctIndex = -1;
+      if (currentCorrectLetter) {
+        const target = currentCorrectLetter.trim().toLowerCase();
+        
+        // Try matching by standardized letter index (e.g., 'a' -> 0, 'b' -> 1)
+        if (target.length === 1 && target >= 'a' && target <= 'z') {
+          const targetCode = target.charCodeAt(0) - 97;
+          if (targetCode >= 0 && targetCode < bufferedChoices.length) {
+            correctIndex = targetCode;
+          }
+        }
+
+        // Try matching by original letter prefix (case-insensitive)
+        if (correctIndex === -1) {
+          correctIndex = bufferedChoices.findIndex(c => c.originalLetter && c.originalLetter.toLowerCase() === target);
+        }
+
+        // Try matching by 1-based index if target is a number
+        if (correctIndex === -1 && /^\d+$/.test(target)) {
+          const numIdx = parseInt(target, 10) - 1;
+          if (numIdx >= 0 && numIdx < bufferedChoices.length) {
+            correctIndex = numIdx;
+          }
+        }
+
+        // Try matching by exact choice text (case-insensitive, trimmed)
+        if (correctIndex === -1) {
+          correctIndex = bufferedChoices.findIndex(c => c.text.toLowerCase() === target || c.text.toLowerCase().replace(/\*\*/g, '') === target);
+        }
+      }
+
+      // 3. Push the standardized choices to output
+      bufferedChoices.forEach((choice, idx) => {
+        const isCorrect = choice.isCorrect || (idx === correctIndex);
+        
+        if (choice.type === 'checkbox') {
+          const prefix = isCorrect ? '[*]' : '[ ]';
+          output.push(`${prefix} ${choice.text}`);
+        } else {
+          const prefix = isCorrect ? '*' : '';
+          const stdLetter = String.fromCharCode(97 + idx); // a, b, c, d...
+          output.push(`${prefix}${stdLetter}) ${choice.text}`);
+        }
+      });
+
+      // 4. Push feedbacks or explanations
+      bufferedFeedbacks.forEach(f => {
+        output.push(f);
+      });
+
+      // Reset buffers
+      bufferedQuestionLine = null;
+      bufferedChoices = [];
+      bufferedFeedbacks = [];
+      currentQuestionNum = null;
+      currentCorrectLetter = null;
+      choiceCount = 0;
+      
+      // Separate questions with a clean empty line
+      output.push('');
+    }
+
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i];
       let trimmed = line.trim();
 
       if (answerKeyLines.has(i)) {
+        flushBufferedQuestion();
         output.push('% ' + line);
         continue;
       }
 
       if (trimmed === '') {
-        output.push('');
+        // If we are currently buffering a question, do not push empty lines immediately
+        // to prevent splitting the question block. Otherwise, push it.
+        if (!bufferedQuestionLine) {
+          output.push('');
+        }
         continue;
       }
 
@@ -265,10 +373,12 @@ export class QuestionParser {
       if (checkTrimmed.includes('\t')) {
         const cells = checkTrimmed.split('\t').map(c => c.trim()).filter(c => c.length > 0);
         if (cells.length > 0 && (cells[0] === '#' || cells[0].toLowerCase() === 'no.' || cells[0].toLowerCase() === 'id')) {
+          flushBufferedQuestion();
           output.push('% ' + line);
           continue;
         }
         if (cells.length >= 3 && /^\d+$/.test(cells[0])) {
+          flushBufferedQuestion();
           const qNum = cells[0];
           const qText = cells[1];
           const choices = cells.slice(2);
@@ -292,6 +402,7 @@ export class QuestionParser {
 
       // Heuristic: ignore section headers and prevent them from appending to previous questions
       if (checkTrimmed.match(sectionHeaderRegex)) {
+        flushBufferedQuestion();
         output.push('');
         output.push('% ' + trimmed);
         output.push('');
@@ -336,6 +447,7 @@ export class QuestionParser {
           }
 
           if (choices.length >= 2) {
+            flushBufferedQuestion();
             output.push(`${qNum}. ${qText}`);
             choices.forEach((choice, idx) => {
               let isCorrect = false;
@@ -348,6 +460,7 @@ export class QuestionParser {
               const prefix = isCorrect ? '*' : '';
               output.push(`${prefix}${letter}) ${choiceText}`);
             });
+            output.push('');
 
             i = lastChoiceIdx;
             currentQuestionNum = qNum;
@@ -359,6 +472,7 @@ export class QuestionParser {
 
       let qMatch = checkTrimmed.match(questionStartRegex);
       if (qMatch) {
+        flushBufferedQuestion();
         currentQuestionNum = qMatch[1];
         let qText = qMatch[2];
         currentCorrectLetter = null;
@@ -388,6 +502,7 @@ export class QuestionParser {
             output.push('a) True');
             output.push('*b) False');
           }
+          output.push('');
           continue;
         }
 
@@ -435,6 +550,7 @@ export class QuestionParser {
             output.push(`~ ${stepText}`);
             lastK = peekIndices[idx];
           }
+          output.push('');
           i = lastK;
           continue;
         }
@@ -519,44 +635,22 @@ export class QuestionParser {
               }
             }
           }
+          output.push('');
           i = lastK;
           continue;
         }
 
         const textToPush = isBoldLine ? `**${qText}**` : qText;
-        output.push(`${currentQuestionNum}. ${textToPush}`);
+        bufferedQuestionLine = `${currentQuestionNum}. ${textToPush}`;
         continue;
       }
 
       // Check separate-line correct answer declarations: * A, * B, Correct: A
-      let correctMatch = checkTrimmed.match(/^(?:\*|correct|answer):\s*([a-zA-Z])\s*$/i);
+      let cleanLine = checkTrimmed.replace(/\*\*/g, '').trim();
+      let correctMatch = cleanLine.match(/^(?:correct\s*answer|correct|answer)[\s:-]+\s*(.*)$/i) || 
+                         cleanLine.match(/^\*\s*([a-zA-Z0-9])\s*$/);
       if (correctMatch) {
-        const correctLetter = correctMatch[1].toLowerCase();
-        let choiceLines = [];
-        let questionIdx = -1;
-        for (let k = output.length - 1; k >= 0; k--) {
-          const outLine = output[k].trim();
-          if (outLine.match(/^\d+[\s).:-]+\s*(.*)$/)) {
-            questionIdx = k;
-            break;
-          }
-          const choiceMatch = outLine.match(/^([a-zA-Z])[\s).:-]+\s*(.*)$/);
-          if (choiceMatch) {
-            choiceLines.unshift({ index: k, letter: choiceMatch[1].toLowerCase() });
-          }
-        }
-        
-        let matchedChoice = choiceLines.find(c => c.letter === correctLetter);
-        if (!matchedChoice) {
-          const charIndex = correctLetter.charCodeAt(0) - 97;
-          if (charIndex >= 0 && charIndex < choiceLines.length) {
-            matchedChoice = choiceLines[charIndex];
-          }
-        }
-        
-        if (matchedChoice) {
-          output[matchedChoice.index] = '*' + output[matchedChoice.index].trim();
-        }
+        currentCorrectLetter = correctMatch[1].trim();
         continue;
       }
 
@@ -564,105 +658,133 @@ export class QuestionParser {
       const inlineChoices = splitInlineChoices(trimmed);
       if (inlineChoices) {
         inlineChoices.forEach(c => {
-          let isCorrect = false;
-          if (currentCorrectLetter && c.letter.toUpperCase() === currentCorrectLetter) {
-            isCorrect = true;
-          }
-          const prefix = isCorrect ? '*' : '';
-          output.push(`${prefix}${c.letter}) ${c.text}`);
+          bufferedChoices.push({
+            type: 'letter',
+            originalLetter: c.letter,
+            text: c.text,
+            isCorrect: c.isCorrect
+          });
+          choiceCount++;
         });
         continue;
       }
 
-      let isBoldChoice = isBoldLine;
+      let isChoice = false;
+      let originalLetter = null;
+      let choiceText = null;
+      let isCorrect = isBoldLine;
 
-      // Strip leading asterisk * if present (indicating correct choice)
       let hasLeadingAsterisk = false;
-      if (checkTrimmed.startsWith('*') && !checkTrimmed.startsWith('**')) {
-        checkTrimmed = checkTrimmed.substring(1).trim();
+      let cLine = checkTrimmed;
+      if (cLine.startsWith('*') && !cLine.startsWith('**')) {
         hasLeadingAsterisk = true;
+        cLine = cLine.substring(1).trim();
       }
 
-      // Check roman numeral choices
-      let rMatch = checkTrimmed.match(romanChoiceRegex);
-      if (rMatch && !/^\d+/.test(checkTrimmed)) {
-        let isCorrect = isBoldChoice || hasLeadingAsterisk;
-        let choiceText = rMatch[3].trim();
-
+      // Check checkbox choices first
+      let cbMatch = cLine.match(/^(\[[xX\*\s]?\])\s*(.*)$/);
+      if (cbMatch) {
+        isChoice = true;
+        const cbPrefix = cbMatch[1];
+        choiceText = cbMatch[2].trim();
+        isCorrect = cbPrefix.includes('*') || cbPrefix.toLowerCase().includes('x') || isBoldLine;
+        
         if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
           choiceText = choiceText.substring(2, choiceText.length - 2).trim();
-          isCorrect = true;
-        } else if (entireBoldRegex.test(choiceText)) {
-          choiceText = choiceText.replace(entireBoldRegex, '$1').trim();
-          isCorrect = true;
         }
-
-        let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
-        if (suffixCorrectMatch) {
-          choiceText = suffixCorrectMatch[1].trim();
-          isCorrect = true;
-        }
-
-        if (trimmed.startsWith('*') || checkTrimmed.startsWith('*')) {
-          isCorrect = true;
-        }
-
-        const letter = String.fromCharCode(97 + choiceCount);
-        choiceCount++;
-
-        const prefix = isCorrect ? '*' : '';
-        output.push(`${prefix}${letter}) ${choiceText}`);
-        continue;
+        
+        bufferedChoices.push({
+          type: 'checkbox',
+          isCorrect: isCorrect,
+          text: choiceText
+        });
       }
 
-      let cMatch = checkTrimmed.match(choiceRegex);
-      if (cMatch && !/^\d+/.test(checkTrimmed)) {
-        let letter = cMatch[1].toUpperCase();
-        let choiceText = cMatch[2].trim();
-        
-        const stdLetter = String.fromCharCode(97 + choiceCount);
-        choiceCount++;
+      if (!isChoice) {
+        // Check roman numerals
+        let rMatch = cLine.match(/^(i{1,3}|iv|v|vi{1,3}|ix|x)[\s).:-]+\s*(.*)$/i);
+        // Check letters
+        let cMatch = cLine.match(/^([a-zA-Z])[\s).:-]+\s*(.*)$/);
 
-        let isCorrect = isBoldChoice || hasLeadingAsterisk;
+        if (rMatch && !/^\d+/.test(cLine)) {
+          isChoice = true;
+          originalLetter = rMatch[1];
+          choiceText = rMatch[2].trim();
+          isCorrect = hasLeadingAsterisk || isBoldLine;
+        } else if (cMatch && !/^\d+/.test(cLine)) {
+          isChoice = true;
+          originalLetter = cMatch[1];
+          choiceText = cMatch[2].trim();
+          isCorrect = hasLeadingAsterisk || isBoldLine;
+        }
 
-        if (currentCorrectLetter) {
-          const targetLetter = currentCorrectLetter.toLowerCase();
-          if (targetLetter === stdLetter || targetLetter.charCodeAt(0) - 97 === (choiceCount - 1)) {
+        if (isChoice) {
+          if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+            choiceText = choiceText.substring(2, choiceText.length - 2).trim();
             isCorrect = true;
           }
-        }
+          let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
+          if (suffixCorrectMatch) {
+            choiceText = suffixCorrectMatch[1].trim();
+            isCorrect = true;
+          }
 
-        if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
-          choiceText = choiceText.substring(2, choiceText.length - 2).trim();
-          isCorrect = true;
-        } else if (entireBoldRegex.test(choiceText)) {
-          choiceText = choiceText.replace(entireBoldRegex, '$1').trim();
-          isCorrect = true;
+          bufferedChoices.push({
+            type: 'letter',
+            originalLetter: originalLetter,
+            text: choiceText,
+            isCorrect: isCorrect
+          });
         }
+      }
 
-        let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
-        if (suffixCorrectMatch) {
-          choiceText = suffixCorrectMatch[1].trim();
-          isCorrect = true;
+      // Check bullet choices (only if we don't have a correct answer letter matched yet, to avoid matching feedback lines as bullet choices)
+      if (!isChoice && !currentCorrectLetter) {
+        let bMatch = checkTrimmed.match(/^([•\-–—])\s*(.*)$/);
+        if (bMatch) {
+          isChoice = true;
+          choiceText = bMatch[2].trim();
+          
+          if (choiceText.startsWith('**') && choiceText.endsWith('**')) {
+            choiceText = choiceText.substring(2, choiceText.length - 2).trim();
+            isCorrect = true;
+          }
+          let suffixCorrectMatch = choiceText.match(/(.*?)\s*(\(correct\)|<--\s*correct|\(correct\s*answer\)|\*\*)\s*$/i);
+          if (suffixCorrectMatch) {
+            choiceText = suffixCorrectMatch[1].trim();
+            isCorrect = true;
+          }
+
+          bufferedChoices.push({
+            type: 'bullet',
+            text: choiceText,
+            isCorrect: isCorrect
+          });
         }
+      }
 
-        if (trimmed.startsWith('*') || checkTrimmed.startsWith('*')) {
-          isCorrect = true;
-        }
-
-        const prefix = isCorrect ? '*' : '';
-        output.push(`${prefix}${stdLetter}) ${choiceText}`);
+      if (isChoice) {
+        choiceCount++;
         continue;
       }
 
-      if (trimmed.toLowerCase().startsWith('[x]')) {
-        output.push('[*] ' + trimmed.substring(3).trim());
+      // Check feedback
+      if (trimmed.startsWith('...') || trimmed.startsWith('+') || trimmed.startsWith('-')) {
+        if (bufferedQuestionLine) {
+          bufferedFeedbacks.push(line);
+          continue;
+        }
+      }
+
+      // If we are currently buffering a question prompt, and haven't seen choices yet,
+      // treat this line as part of the multi-line prompt text.
+      if (bufferedQuestionLine && bufferedChoices.length === 0) {
+        bufferedQuestionLine += '\n' + line;
         continue;
       }
-      if (trimmed.startsWith('[ ]') || trimmed.startsWith('[]')) {
-        output.push('[ ] ' + trimmed.replace(/^\[\s*\]/, '').trim());
-        continue;
-      }
+
+      // Otherwise, flush first since we are exiting the context of the buffered question
+      flushBufferedQuestion();
 
       let isBoldTf = false;
       let tfText = trimmed;
@@ -731,6 +853,9 @@ export class QuestionParser {
 
       output.push(line);
     }
+
+    // Flush any remaining buffered question
+    flushBufferedQuestion();
 
     // Post-process: Convert multiple correct answer MC/TF questions to MA syntax
     let idx = 0;
@@ -853,7 +978,9 @@ export class QuestionParser {
         for (const w of [...rawWarnings, ...cleanedWarnings]) {
           // Skip raw warnings that are likely false positives corrected by cleanText
           if (rawWarnings.includes(w)) {
-            if (w.message.includes("no specified type") || w.message.includes("dangling line")) {
+            if (w.message.includes("no specified type") || 
+                w.message.includes("dangling line") || 
+                w.message.includes("Ignored line outside of questions")) {
               continue;
             }
           }
